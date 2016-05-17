@@ -55,6 +55,7 @@ class numberizer:
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
         n = [self.v2i[vocab_type,w] for w in line.split()]
+        n = [self.v2i[vocab_type,bos]] + n + [self.v2i[vocab_type,eos]]
         n_sent.append(n)
     return n_sent
 

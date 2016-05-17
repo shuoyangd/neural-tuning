@@ -275,25 +275,32 @@ def read_alignment(align_file):
       n_align.append(n)
   return n_align
 
+def get_left_src(src, a, w):
+  #TODO: pad the context appropriately 
+  return src[a - w : a]
+
+def get_right_src(src, a, w):
+  #TODO: pad the context appropriately
+  return src [a+1: a + 1 + w]
+
 def make_training_instances(trnz_align, trnz_target, trnz_source):
-  input_instances = []
-  output_instances = []
+  input_contexts = []
+  output_labels = []
   for trg, src, align in zip(trnz_target, trnz_source):
-    for idx in range(len(trg)):
+    for idx in range(1, len(trg)):
       tc = [] # contains target context
       sc = [] # contains source context
-      tc = trg[:idx]
-      if len(tc) < trg_context_size:
+      tc = trg[idx-3:idx] #TODO: check this
+      if len(tc) < trg_context_size: #TODO: define trg_context_size
         tc = [nz.v2i[TARGET_TYPE,bos]] * (trg_context_size - len(tc))
       else:
         pass
       h_a = get_effective_align(align)
-      src = src[h_a - w: h_a] + [src[h_a]] + src[h_a + 1 : h_a + 1 + w]
-
-
-
-
-  pass
+      sc = get_left_src(src, h_a, w)+ [src[h_a]] + get_right_src(src, h_a, w)
+      fullc = sc + tc
+      input_contexts.append(fullc)
+      output_labels.append(trg[idx])
+  return input_contexts, output_labels
 
 def main(options):
   # collecting vocab
@@ -306,7 +313,7 @@ def main(options):
   trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
   trnx_align = read_alignment(options.align_file) 
-  input_instances, output_instances = 
+  input_contexts, output_labels =  make_training_instances
   (trnz, vocab, unigram_count) = nz.numberize(options.training_file)
   bos_index = vocab.index(BOS)
   eos_index = vocab.index(EOS)
