@@ -30,6 +30,29 @@ class numberizer:
     self.bos = bos
     self.eos = eos
     self.dont_augment_bos_eos = not bos or not eos
+    self.v2i = {}
+    self.t2i = {}
+    self.t2c = {}
+    self.s2i = {}
+
+  def build_vocab(vocab_type, text_file):
+      with codecs.open(text_file, 'r', 'utf8') as f:
+          for line in f:
+              for word in line.split():
+                  self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word)), len(self.v2i)
+                  if vocab_type == 'target':
+                      self.t2i[word] = self.t2i.get(word, len(self.t2i))
+                      self.t2c[word] = self.t2c.get(word, 0) + 1
+                  else:
+                      self.s2i[word] = self.s2i.get(word, len(self.s2i))
+  
+  def numberize_sent(vocab_type, text_file):
+      n_sent = []
+      with codecs.open(text_file, 'r', 'utf8') as f:
+          for line in f:
+              n = [self.v2i[w] for w in line.split()]
+              n_sent.append(n)
+      return n_sent
 
   # the three returned values are:
   # + numberized corpus
