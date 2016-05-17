@@ -283,20 +283,20 @@ def get_right_src(src, a, w):
   #TODO: pad the context appropriately
   return src [a+1: a + 1 + w]
 
-def make_training_instances(trnz_align, trnz_target, trnz_source):
+def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=3, sw_size=5):
   input_contexts = []
   output_labels = []
   for trg, src, align in zip(trnz_target, trnz_source):
     for idx in range(1, len(trg)):
       tc = [] # contains target context
       sc = [] # contains source context
-      tc = trg[idx-3:idx] #TODO: check this
-      if len(tc) < trg_context_size: #TODO: define trg_context_size
-        tc = [nz.v2i[TARGET_TYPE,bos]] * (trg_context_size - len(tc))
-      else:
-        pass
+      tc = trg[idx - tc_size if idx - tc_size > 0 else 0 :idx]
+      if len(tc) < tc_size:
+        tc = [nz.v2i[TARGET_TYPE,bos]] * (tc_size - len(tc))
+      assert len(tc) == tc_size
       h_a = get_effective_align(align)
       sc = get_left_src(src, h_a, w)+ [src[h_a]] + get_right_src(src, h_a, w)
+      assert len(fullc) = tc_size + 1 + (2 * sw_size)
       fullc = sc + tc
       input_contexts.append(fullc)
       output_labels.append(trg[idx])
