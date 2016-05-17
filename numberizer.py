@@ -14,8 +14,10 @@ import sys
 
 logging.basicConfig(
     format='%(asctime)s %(levelname)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S', level=logging.DEBUG)
-
+    datefmt='%Y-%m-%d %H:%M:%S', level=logging.DEBUG)
+global TARGET_TYPE, SOURCE_TYPE
+TARGET_TYPE='t'
+SOURCE_TYPE='s'
 class numberizer:
 
   # vocabulary limit = 0 means no vocabulary truncating will be performed
@@ -36,23 +38,25 @@ class numberizer:
     self.s2i = {}
 
   def build_vocab(vocab_type, text_file):
-      with codecs.open(text_file, 'r', 'utf8') as f:
-          for line in f:
-              for word in line.split():
-                  self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word)), len(self.v2i)
-                  if vocab_type == 'target':
-                      self.t2i[word] = self.t2i.get(word, len(self.t2i))
-                      self.t2c[word] = self.t2c.get(word, 0) + 1
-                  else:
-                      self.s2i[word] = self.s2i.get(word, len(self.s2i))
-  
+    with codecs.open(text_file, 'r', 'utf8') as f:
+      for line in f:
+        for word in line.split():
+          self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word)), len(self.v2i)
+            if vocab_type == 'target':
+              self.t2i[word] = self.t2i.get(word, len(self.t2i))
+              self.t2c[word] = self.t2c.get(word, 0) + 1
+            else:
+              self.s2i[word] = self.s2i.get(word, len(self.s2i))
+    self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
+    self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
+
   def numberize_sent(vocab_type, text_file):
-      n_sent = []
-      with codecs.open(text_file, 'r', 'utf8') as f:
-          for line in f:
-              n = [self.v2i[w] for w in line.split()]
-              n_sent.append(n)
-      return n_sent
+    n_sent = []
+    with codecs.open(text_file, 'r', 'utf8') as f:
+      for line in f:
+        n = [self.v2i[vocab_type,w] for w in line.split()]
+        n_sent.append(n)
+    return n_sent
 
   # the three returned values are:
   # + numberized corpus
@@ -64,9 +68,9 @@ class numberizer:
     text_file = open(text_dir)
     cnt = Counter()
     if self.limit != 0:
-        vocab = [self.unk]
+      vocab = [self.unk]
     else:
-        vocab = []
+      vocab = []
     linen = 1
     logging.info("Starting first scan of the training corpus.")
     for line in text_file:
@@ -100,7 +104,7 @@ class numberizer:
           oov_count = cnt[key]
           del cnt[key]
           cnt[self.unk] += oov_count
-    
+
     # second scan: numberize and truncate
     text_file = open(text_dir)
     numberized = []
