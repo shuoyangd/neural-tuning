@@ -9,6 +9,7 @@ import argparse
 from collections import Counter
 import logging
 from numberizer import numberizer
+from numberizer import TARGET_TYPE, SOURCE_TYPE
 import numpy as np
 import pdb
 import theano
@@ -41,15 +42,15 @@ parser.add_argument("--batch-size", "-b", dest="batch_size", type=int, metavar="
 parser.add_argument("--gradient-check", dest="gradient_check", type=int, metavar="INT", help="The iteration interval for gradient check. Pass 0 if gradient check should not be performed (default = 0).")
 
 parser.set_defaults(
-  learning_rate=1.0,
+  learning_rate=0.001,
   word_dim=150,
   vocab_size=500000,
-  hidden_dim1=150,
-  hidden_dim2=750,
+  hidden_dim1=512,
+  hidden_dim2=512,
   noise_sample_size=100,
-  n_gram=5,
+  n_gram=14,
   max_epoch=5,
-  batch_size=1000,
+  batch_size=128,
   save_interval=1)
 
 if theano.config.floatX=='float32':
@@ -60,7 +61,7 @@ else:
 class nplm:
 
   # the default noise_distribution is uniform
-  def __init__(self, n_gram, vocab_size, word_dim=150, hidden_dim1=150, hidden_dim2=750, noise_sample_size=100, batch_size=1000, noise_dist=[]):
+  def __init__(self, n_gram, vocab_size, word_dim=150, hidden_dim1=512, hidden_dim2=512, noise_sample_size=100, batch_size=1000, noise_dist=[]):
     self.n_gram = n_gram
     self.vocab_size = vocab_size
     self.word_dim = word_dim
@@ -70,16 +71,16 @@ class nplm:
     self.batch_size = batch_size
     self.noise_dist = noise_dist if noise_dist != [] else np.array([floatX(1. / vocab_size)] * vocab_size, dtype=floatX)
     self.D = theano.shared(
-        np.random.uniform(-0.01, 0.01, (word_dim, vocab_size)).astype(floatX),
+        np.random.uniform(-0.05, 0.05, (word_dim, vocab_size)).astype(floatX),
         name = 'D')
     self.C = theano.shared(
-        np.random.uniform(-0.01, 0.01, (hidden_dim1, word_dim)).astype(floatX),
+        np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim)).astype(floatX),
         name = 'C')
     self.M = theano.shared(
-        np.random.uniform(-0.01, 0.01, (hidden_dim2, hidden_dim1)).astype(floatX),
+        np.random.uniform(-0.05, 0.05, (hidden_dim2, hidden_dim1)).astype(floatX),
         name = 'M')
     self.E = theano.shared(
-        np.random.uniform(-0.01, 0.01, (vocab_size, hidden_dim2)).astype(floatX),
+        np.random.uniform(-0.05, 0.05, (vocab_size, hidden_dim2)).astype(floatX),
         name = 'E')
     self.Cb = theano.shared(
         np.array([[-np.log(vocab_size)] * hidden_dim1]).astype(floatX).T,
@@ -266,12 +267,46 @@ def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist):
   # logging.info("epoch {0} finished with NCE loss {1}".format(epoch, total_loss))
   logging.info("epoch {0} finished".format(epoch))
 
+def read_alignment(align_file):
+  n_align = []
+  with open(align_file) as f:
+    for line in f:
+      n = [(int(t.split('-')[0]), int(t.split('-')[1])) for t in line.strip().split()]
+      n_align.append(n)
+  return n_align
+
+def make_training_instances(trnz_align, trnz_target, trnz_source):
+  input_instances = []
+  output_instances = []
+  for trg, src, align in zip(trnz_target, trnz_source):
+    for idx in range(len(trg)):
+      tc = [] # contains target context
+      sc = [] # contains source context
+      tc = trg[:idx]
+      if len(tc) < trg_context_size:
+        tc = [nz.v2i[TARGET_TYPE,bos]] * (trg_context_size - len(tc))
+      else:
+        pass
+      h_a = get_effective_align(align)
+      src = src[h_a - w: h_a] + [src[h_a]] + src[h_a + 1 : h_a + 1 + w]
+
+
+
+
+  pass
+
 def main(options):
   # collecting vocab
   logging.info("start collecting vocabulary")
   indexed_ngrams = []
   predictions = []
   nz = numberizer(limit = options.vocab_size, unk = UNK, bos = BOS, eos = EOS)
+  nz.build_vocab(TARGET_TYPE,options.target_file)
+  nz.build_vocab(SOURCE_TYPE,options.source_file)
+  trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
+  trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
+  trnx_align = read_alignment(options.align_file) 
+  input_instances, output_instances = 
   (trnz, vocab, unigram_count) = nz.numberize(options.training_file)
   bos_index = vocab.index(BOS)
   eos_index = vocab.index(EOS)
@@ -289,7 +324,6 @@ def main(options):
   del trnz
 
   # build quick vocab indexer
-  v2i = {}
   for i in range(len(vocab)):
     v2i[vocab[i]] = i
 
