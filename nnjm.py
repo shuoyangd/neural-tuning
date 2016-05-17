@@ -26,7 +26,9 @@ BOS = "<s>"
 EOS = "</s>"
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--training-file", "-t", dest="training_file", metavar="PATH", help="File used as training corpus.", required=True)
+parser.add_argument("--training-file", "-t", dest="training_file", metavar="PATH", help="file with target sentences.", required=True)
+parser.add_argument("--source-file", "-s", dest="source_file", metavar="PATH", help="file with source sentences.", required=True)
+parser.add_argument("--alignment-file", "-a", dest="alignment_file", metavar="PATH", help="file with word alignments between source-target (giza style).", required=True)
 parser.add_argument("--working-dir", "-w", dest="working_dir", metavar="PATH", help="Directory used to dump models etc.", required=True)
 parser.add_argument("--validation-file", dest="validation_file", metavar="PATH", help="Validation corpus used for stopping criteria.")
 parser.add_argument("--learning-rate", dest="learning_rate", type=float, metavar="FLOAT", help="Learning rate used to update weights (default = 1.0).")
@@ -48,6 +50,8 @@ parser.set_defaults(
   hidden_dim1=512,
   hidden_dim2=512,
   noise_sample_size=100,
+  sw_size=4,
+  tc_size=5,
   n_gram=14,
   max_epoch=5,
   batch_size=128,
@@ -276,14 +280,62 @@ def read_alignment(align_file):
   return n_align
 
 def get_left_src(src, a, w):
-  #TODO: pad the context appropriately 
-  return src[a - w : a]
+  lsc =  src[a - w if a - w > 0 else 0: a]
+  if len(lsc) < w:
+    lsc = [nz.v2i[SOURCE_TYPE, bos]] * (w - len(lsc)) + lsc
+  return lsc
+
 
 def get_right_src(src, a, w):
-  #TODO: pad the context appropriately
-  return src [a+1: a + 1 + w]
+  rsc = src[a+1: a + 1 + w]
+  if len(rsc) < w:
+    rsc = rsc + [nz.v2i[SOURCE_TYPE,eos]] * (w - len(rsc))
+  return rsc
 
-def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=3, sw_size=5):
+def get_nearest_src_align(ta2sa, idx):
+  assert idx not in ta2sa
+  for dist in range(1,100):
+    for d in [+1, -1]:
+      idx_d_dist = idx + (dist * d)
+      if idx_d_dist in ta2sa and len(ta2sa[idx_d_dist]) == 1:
+        #if target word is aligned to just one source word
+        return ta2sa[idx_d_dist]
+      elif idx_d_dist in ta2sa and len(ta2sa[idx_d_dist]) > 1:
+        #if target word is aligned to many source words, pick the middle alignment
+        _s = sorted(ta2sa[idx_d_dist])
+        return _s[int(len(_s)/2)]
+      else:
+        pass
+
+def get_effective_align(align, idx):
+  ta2sa = {}
+  sa2ta = {}
+  for sa,ta in align:
+    _s = ta2sa.get(ta, [])
+    _s.append(sa)
+    ta2sa[ta] = _s
+    _t = sa2ta.get(sa, [])
+    _t.append(ta)
+    sa2ta[sa] = _t
+  if idx in ta2sa and len(ta2sa[idx]) == 1:
+    #if target word is aligned to just one source word
+    return ta2sa[idx]
+  elif idx in ta2sa and len(ta2sa[idx]) > 1:
+    #if target word is aligned to many source words, pick the middle alignment
+    _s = sorted(ta2sa[idx])
+    return _s[int(len(_s)/2)]
+  elif idx not in ta2sa:
+    #if the target word is aligned to null
+    nearest_sa = get_nearest_trg_align(ta2sa, idx)
+    return nearest_sa
+  else:
+    raise NotImplementedError
+
+
+
+
+
+def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5, sw_size=4):
   input_contexts = []
   output_labels = []
   for trg, src, align in zip(trnz_target, trnz_source):
@@ -294,8 +346,8 @@ def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=3,
       if len(tc) < tc_size:
         tc = [nz.v2i[TARGET_TYPE,bos]] * (tc_size - len(tc))
       assert len(tc) == tc_size
-      h_a = get_effective_align(align)
-      sc = get_left_src(src, h_a, w)+ [src[h_a]] + get_right_src(src, h_a, w)
+      h_a = get_effective_align(align, idx)
+      sc = get_left_src(src, h_a,sw_size)+ [src[h_a]] + get_right_src(src, h_a, sw_size)
       assert len(fullc) = tc_size + 1 + (2 * sw_size)
       fullc = sc + tc
       input_contexts.append(fullc)
@@ -305,42 +357,21 @@ def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=3,
 def main(options):
   # collecting vocab
   logging.info("start collecting vocabulary")
-  indexed_ngrams = []
-  predictions = []
+  #indexed_ngrams = []
+  #predictions = []
   nz = numberizer(limit = options.vocab_size, unk = UNK, bos = BOS, eos = EOS)
   nz.build_vocab(TARGET_TYPE,options.target_file)
   nz.build_vocab(SOURCE_TYPE,options.source_file)
   trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
   trnx_align = read_alignment(options.align_file) 
-  input_contexts, output_labels =  make_training_instances
-  (trnz, vocab, unigram_count) = nz.numberize(options.training_file)
-  bos_index = vocab.index(BOS)
-  eos_index = vocab.index(EOS)
-  for numberized_line in trnz:
-    # think of a sentence with only 1 word w0 and we are extracting trigrams (n_gram = 3):
-    # the numerized version would be "<s> w0 </s>".
-    # after the sentence is augmented with 1 extra "<s>" at the beginning (now has length 4), 
-    # we want to extract 1 trigram: [<s>, <s>, w0] (note that we don't want [<s>, w0, </s>])
-    indexed_sentence = [bos_index] * (options.n_gram - 2)
-    indexed_sentence.extend(numberized_line)
-    for start in range(len(indexed_sentence) - options.n_gram):
-      indexed_ngrams.append(indexed_sentence[start: start + options.n_gram])
-      if start + options.n_gram < len(indexed_sentence):
-        predictions.append(indexed_sentence[start + options.n_gram])
-  del trnz
+  input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
 
-  # build quick vocab indexer
-  for i in range(len(vocab)):
-    v2i[vocab[i]] = i
-
-  total_unigram_count = floatX(sum(unigram_count.values()))
-  unigram_dist = [floatX(0.0)] * len(unigram_count)
-  # pdb.set_trace()
-  for key in unigram_count.keys():
-    unigram_dist[v2i[key]] = floatX(unigram_count[key] / total_unigram_count)
-  del unigram_count
-  unigram_dist = np.array(unigram_dist, dtype=floatX)
+  target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
+  for tw, tw_count in nz.t2c.iteritems()
+    t_idx = nz.t2i[tw]
+    target_unigram_counts[t_idx] = floatX(tw_count)
+  target_unigram_dist  = target_unigram_counts / np.sum(target_unigram_counts)
   logging.info("vocabulary collection finished")
 
   # training
@@ -354,9 +385,9 @@ def main(options):
       "word dimension {0}, hidden dimension 1 {1}, hidden dimension 2 {2}, noise sample size {3}"
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
   net = nplm(options.n_gram, len(vocab), options.word_dim, options.hidden_dim1, options.hidden_dim2,
-      options.noise_sample_size, options.batch_size, unigram_dist)
+      options.noise_sample_size, options.batch_size, target_unigram_dist)
   for epoch in range(1, options.max_epoch + 1):
-    sgd(indexed_ngrams, predictions, net, options, epoch, unigram_dist)
+    sgd(input_contexts, output_labels, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
     	dump(net, options.working_dir + "/nplm.model." + str(epoch), options, vocab)
   logging.info("training finished")
