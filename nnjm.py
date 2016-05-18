@@ -1,4 +1,4 @@
-# nnjm -- a theano re-implementation of (Vaswani et al. 2013)
+# NNJM -- a theano re-implementation of (Vaswani et al. 2013)
 # 
 # proudly developed by
 # Shuoyang Ding @ Johns Hopkins University
@@ -7,6 +7,7 @@
 
 import argparse
 from collections import Counter
+import codecs
 import logging
 from numberizer import numberizer
 from numberizer import TARGET_TYPE, SOURCE_TYPE
@@ -62,7 +63,7 @@ if theano.config.floatX=='float32':
 else:
   floatX = np.float64
 
-class nplm:
+class NNJM:
 
   # the default noise_distribution is uniform
   def __init__(self, n_gram, vocab_size, word_dim=150, hidden_dim1=512, hidden_dim2=512, noise_sample_size=100, batch_size=1000, noise_dist=[]):
@@ -77,18 +78,30 @@ class nplm:
     self.D = theano.shared(
         np.random.uniform(-0.05, 0.05, (word_dim, vocab_size)).astype(floatX),
         name = 'D')
-    self.C = theano.shared(
-        np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim)).astype(floatX),
-        name = 'C')
-    self.M = theano.shared(
-        np.random.uniform(-0.05, 0.05, (hidden_dim2, hidden_dim1)).astype(floatX),
-        name = 'M')
+    if hidden_dim1 > 0:
+      self.C = theano.shared(
+          np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim)).astype(floatX),
+          name = 'C') #TODO: this is incorrect, should change at some point.
+    else:
+      pass
+
+    if hidden_dim1 > 0:
+      self.M = theano.shared(
+          np.random.uniform(-0.05, 0.05, (hidden_dim2, hidden_dim1)).astype(floatX),
+          name = 'M')
+    else:
+      self.M = theano.shared(np.random.uniform(-0.05, 0.05, (hidden_dim2,  word_dim * self.ngram)).astype(floatX), name='M') 
+
     self.E = theano.shared(
         np.random.uniform(-0.05, 0.05, (vocab_size, hidden_dim2)).astype(floatX),
         name = 'E')
-    self.Cb = theano.shared(
-        np.array([[-np.log(vocab_size)] * hidden_dim1]).astype(floatX).T,
-        name = 'Cb')
+
+    if hidden_dim1 > 0:
+      self.Cb = theano.shared(
+          np.array([[-np.log(vocab_size)] * hidden_dim1]).astype(floatX).T,
+          name = 'Cb')
+    else:
+      pass
     self.Mb = theano.shared(
         np.array([[-np.log(vocab_size)] * hidden_dim2]).astype(floatX).T,
         name = 'Mb')
@@ -105,14 +118,22 @@ class nplm:
     X = T.lmatrix('X') # (batch_size, n_gram)
     Y = T.lvector('Y') # (batch_size, )
     N = T.lmatrix('N') # (batch_size, noise_sample_size)
-    CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
-    CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
+    if hidden_dim1 > 0:
+      CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
+      CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
+    else:
+      pass
     MMb = T.tile(self.Mb, (1, self.batch_size)) # (hidden_dim2, batch_size)
     EEb = T.tile(self.Eb, (1, self.batch_size)) # (vocab_size, batch_size)
     
     Du = self.D.take(X.T, axis = 1).T # (batch_size, n_gram, word_dim)
-    h1 = T.nnet.relu(CC.dot(T.flatten(Du, outdim=2).T) + CCb) # (hidden_dim1, batch_size)
-    h2 = T.nnet.relu(self.M.dot(h1) + MMb) # (hidden_dim2, batch_size)
+
+    if self.hidden_dim1 > 0:
+      h1 = T.nnet.relu(CC.dot(T.flatten(Du, outdim=2).T) + CCb) # (hidden_dim1, batch_size)
+      h2 = T.nnet.relu(self.M.dot(h1) + MMb) # (hidden_dim2, batch_size)
+    else:
+      h2 = T.nnet.relu(self.M.dot(T.flatten(Du, outdim=2).T) + MMb) # (hidden_dim2, batch_size)
+
     O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, vocab_size)
 
     predictions = T.argmax(O, axis=1)
@@ -131,7 +152,10 @@ class nplm:
 
     loss = T.sum(T.log(pd1) + T.sum(T.log(pd0), axis=1)) # scalar
     dD = T.grad(loss, self.D)
-    dC = T.grad(loss, self.C)
+    if self.hidden_dim1 > 0:
+      dC = T.grad(loss, self.C)
+    else:
+      pass
     dM = T.grad(loss, self.M)
     dE = T.grad(loss, self.E)
     dCb = T.grad(loss, self.Cb)
@@ -143,20 +167,33 @@ class nplm:
     self.pred = theano.function(inputs = [X], outputs = predictions)
     self.xent = theano.function(inputs = [X, Y], outputs = xent)
     self.loss = theano.function(inputs = [X, Y, N], outputs = loss)
-    self.backprop = theano.function(inputs = [X, Y, N], outputs = [dD, dC, dM, dE, dCb, dMb, dEb])
-    self.sgd = theano.function(inputs = [X, Y, N, lr], outputs = [], 
-        updates = [
-            (self.D, self.D + lr * dD),
-            (self.C, self.C + lr * dC),
-            (self.M, self.M + lr * dM),
-            (self.E, self.E + lr * dE),
-            (self.Cb, self.Cb + lr * dCb), 
-            (self.Mb, self.Mb + lr * dMb), 
-            (self.Eb, self.Eb + lr * dEb), 
-            ])
-    self.weights = theano.function(inputs = [], outputs = [self.D, self.C, self.M, self.E, self.Cb, self.Mb, self.Eb])
+    if self.hidden_dim1 > 0:
+      self.backprop = theano.function(inputs = [X, Y, N], outputs = [dD, dC, dM, dE, dCb, dMb, dEb])
+      self.sgd = theano.function(inputs = [X, Y, N, lr], outputs = [], 
+          updates = [
+              (self.D, self.D + lr * dD),
+              (self.C, self.C + lr * dC),
+              (self.M, self.M + lr * dM),
+              (self.E, self.E + lr * dE),
+              (self.Cb, self.Cb + lr * dCb), 
+              (self.Mb, self.Mb + lr * dMb), 
+              (self.Eb, self.Eb + lr * dEb), 
+              ])
+      self.weights = theano.function(inputs = [], outputs = [self.D, self.C, self.M, self.E, self.Cb, self.Mb, self.Eb])
+    else:
+      self.backprop = theano.function(inputs = [X, Y, N], outputs = [dD, dM, dE, dMb, dEb])
+      self.sgd = theano.function(inputs = [X, Y, N, lr], outputs = [], 
+          updates = [
+              (self.D, self.D + lr * dD),
+              (self.M, self.M + lr * dM),
+              (self.E, self.E + lr * dE),
+              (self.Mb, self.Mb + lr * dMb), 
+              (self.Eb, self.Eb + lr * dEb), 
+              ])
+      self.weights = theano.function(inputs = [], outputs = [self.D,  self.M, self.E,  self.Mb, self.Eb])
+
   
-# ==================== END OF NPLM CLASS DEF ====================
+# ==================== END OF NNJM CLASS DEF ====================
 
 def dump_matrix(m, model_file):
     shape = m.shape
@@ -182,12 +219,12 @@ def dump(net, model_dir, options, vocab):
     model_file.write("input_vocab_size {0}\n".format(options.vocab_size))
     model_file.write("output_vocab_size {0}\n".format(options.vocab_size))
     model_file.write("input_embedding_dimension {0}\n".format(options.word_dim))
-    model_file.write("num_hidden {0}\n".format(options.hidden_dim1)) #TODO: does not match nnjm in moses!!
+    model_file.write("num_hidden {0}\n".format(options.hidden_dim1)) #TODO: does not match NNJM in moses!!
     model_file.write("output_embedding_dimension {0}\n".format(options.hidden_dim2))
     model_file.write("activation_function rectifier\n\n") # currently only supporting rectifier... 
 
     # input_vocab
-    #TODO: figure out why this is not dumped in moses' nnjm
+    #TODO: figure out why this is not dumped in moses' NNJM
     model_file.write("\\input_vocab\n")
     for word in vocab:
       model_file.write(word + "\n")
@@ -197,22 +234,29 @@ def dump(net, model_dir, options, vocab):
       model_file.write(word + "\n")
     model_file.write("\n")
 
-    [D, C, M, E, Cb, Mb, Eb] = net.weights()
+    if net.hidden_dim1 > 0:
+      [D, C, M, E, Cb, Mb, Eb] = net.weights()
+    else:
+      [D, M, E, Mb, Eb] = net.weights()
+
 
     # input_embeddings
     model_file.write("\\input_embeddings\n")
     dump_matrix(D.T, model_file)
     model_file.write("\n")
 
+    if net.hidden_dim1 > 0:
     # hidden_weights 1
-    model_file.write("\\hidden_weights 1\n")
-    dump_matrix(C.T, model_file)
-    model_file.write("\n")
+      model_file.write("\\hidden_weights 1\n")
+      dump_matrix(C.T, model_file)
+      model_file.write("\n")
 
-    # hidden_biases 1
-    model_file.write("\\hidden_biases 1\n")
-    dump_matrix(Cb, model_file)
-    model_file.write("\n")
+      # hidden_biases 1
+      model_file.write("\\hidden_biases 1\n")
+      dump_matrix(Cb, model_file)
+      model_file.write("\n")
+    else:
+      pass
 
     # hidden_weights 2
     model_file.write("\\hidden_weights 2\n")
@@ -364,18 +408,18 @@ def main(options):
   if len(vocab) < options.vocab_size:
     logging.warning("The actual vocabulary size of the training corpus {0} ".format(len(vocab)) + 
       "is smaller than the vocab_size option as specified {0}. ".format(options.vocab_size) + 
-      "We don't know what will happen to nplm in that case, but for safety we'll decrease vocab_size as the vocabulary size in the corpus.")
+      "We don't know what will happen to NNJM in that case, but for safety we'll decrease vocab_size as the vocabulary size in the corpus.")
     options.vocab_size = len(vocab)
   logging.info("start training with n-gram size {0}, vocab size {1}, learning rate {2}, "
       .format(options.n_gram, len(vocab), options.learning_rate) + 
       "word dimension {0}, hidden dimension 1 {1}, hidden dimension 2 {2}, noise sample size {3}"
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
-  net = nplm(options.n_gram, len(vocab), options.word_dim, options.hidden_dim1, options.hidden_dim2,
+  net = NNJM(options.n_gram, len(vocab), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
   for epoch in range(1, options.max_epoch + 1):
     sgd(input_contexts, output_labels, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
-    	dump(net, options.working_dir + "/nplm.model." + str(epoch), options, vocab)
+    	dump(net, options.working_dir + "/NNJM.model." + str(epoch), options, vocab)
   logging.info("training finished")
 
 if __name__ == "__main__":
