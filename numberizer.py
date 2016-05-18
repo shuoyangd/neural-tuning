@@ -42,11 +42,11 @@ class numberizer:
       for line in f:
         for word in line.split():
           self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word)), len(self.v2i)
-            if vocab_type == 'target':
-              self.t2i[word] = self.t2i.get(word, len(self.t2i))
-              self.t2c[word] = self.t2c.get(word, 0) + 1
-            else:
-              self.s2i[word] = self.s2i.get(word, len(self.s2i))
+          if vocab_type == 'target':
+            self.t2i[word] = self.t2i.get(word, len(self.t2i))
+            self.t2c[word] = self.t2c.get(word, 0) + 1
+          else:
+            self.s2i[word] = self.s2i.get(word, len(self.s2i))
     self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
     self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
 

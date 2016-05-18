@@ -378,7 +378,7 @@ def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5,
       assert len(tc) == tc_size
       h_a = get_effective_align(align, idx)
       sc = get_left_src(src, h_a,sw_size)+ [src[h_a]] + get_right_src(src, h_a, sw_size)
-      assert len(fullc) = tc_size + 1 + (2 * sw_size)
+      assert len(fullc) == tc_size + 1 + (2 * sw_size)
       fullc = sc + tc
       input_contexts.append(fullc)
       output_labels.append(trg[idx])
@@ -398,7 +398,7 @@ def main(options):
   input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
-  for tw, tw_count in nz.t2c.iteritems()
+  for tw, tw_count in nz.t2c.iteritems():
     t_idx = nz.t2i[tw]
     target_unigram_counts[t_idx] = floatX(tw_count)
   target_unigram_dist  = target_unigram_counts / np.sum(target_unigram_counts)
