@@ -1,4 +1,5 @@
-# NNJM -- a theano re-implementation of (Vaswani et al. 2013)
+#
+#NNJM -- a theano re-implementation of (Vaswani et al. 2013)
 # 
 # proudly developed by
 # Shuoyang Ding @ Johns Hopkins University
@@ -27,9 +28,9 @@ BOS = "<s>"
 EOS = "</s>"
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--training-file", "-t", dest="training_file", metavar="PATH", help="file with target sentences.", required=True)
+parser.add_argument("--target-file", "-t", dest="target_file", metavar="PATH", help="file with target sentences.", required=True)
 parser.add_argument("--source-file", "-s", dest="source_file", metavar="PATH", help="file with source sentences.", required=True)
-parser.add_argument("--alignment-file", "-a", dest="alignment_file", metavar="PATH", help="file with word alignments between source-target (giza style).", required=True)
+parser.add_argument("--alignment-file", "-a", dest="align_file", metavar="PATH", help="file with word alignments between source-target (giza style).", required=True)
 parser.add_argument("--working-dir", "-w", dest="working_dir", metavar="PATH", help="Directory used to dump models etc.", required=True)
 parser.add_argument("--validation-file", dest="validation_file", metavar="PATH", help="Validation corpus used for stopping criteria.")
 parser.add_argument("--learning-rate", dest="learning_rate", type=float, metavar="FLOAT", help="Learning rate used to update weights (default = 1.0).")
@@ -80,8 +81,8 @@ class NNJM:
         name = 'D')
     if hidden_dim1 > 0:
       self.C = theano.shared(
-          np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim)).astype(floatX),
-          name = 'C') #TODO: this is incorrect, should change at some point.
+          np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim * self.ngram)).astype(floatX),
+          name = 'C') 
     else:
       pass
 
@@ -102,12 +103,15 @@ class NNJM:
           name = 'Cb')
     else:
       pass
+
     self.Mb = theano.shared(
         np.array([[-np.log(vocab_size)] * hidden_dim2]).astype(floatX).T,
         name = 'Mb')
+
     self.Eb = theano.shared(
         np.array([[-np.log(vocab_size)] * vocab_size]).astype(floatX).T,
         name = 'Eb')
+
     self.offset = theano.shared(
         np.array(np.arange(0, batch_size * self.vocab_size, self.vocab_size)),
         name = "offset")
@@ -118,23 +122,23 @@ class NNJM:
     X = T.lmatrix('X') # (batch_size, n_gram)
     Y = T.lvector('Y') # (batch_size, )
     N = T.lmatrix('N') # (batch_size, noise_sample_size)
-    if hidden_dim1 > 0:
-      CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
-      CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
-    else:
-      pass
-    MMb = T.tile(self.Mb, (1, self.batch_size)) # (hidden_dim2, batch_size)
-    EEb = T.tile(self.Eb, (1, self.batch_size)) # (vocab_size, batch_size)
+    #if hidden_dim1 > 0:
+    #  CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
+    #CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
+    #else:
+    #pass
+    #MMb = T.tile(self.Mb, (1, self.batch_size)) # (hidden_dim2, batch_size)
+    #EEb = T.tile(self.Eb, (1, self.batch_size)) # (vocab_size, batch_size)
     
     Du = self.D.take(X.T, axis = 1).T # (batch_size, n_gram, word_dim)
 
     if self.hidden_dim1 > 0:
-      h1 = T.nnet.relu(CC.dot(T.flatten(Du, outdim=2).T) + CCb) # (hidden_dim1, batch_size)
-      h2 = T.nnet.relu(self.M.dot(h1) + MMb) # (hidden_dim2, batch_size)
+      h1 = T.nnet.relu(self.C.dot(T.flatten(Du, outdim=2).T) + self.Cb) # (hidden_dim1, batch_size) #TODO: T.flatten look into it...
+      h2 = T.nnet.relu(self.M.dot(h1) + Mb) # (hidden_dim2, batch_size)
     else:
-      h2 = T.nnet.relu(self.M.dot(T.flatten(Du, outdim=2).T) + MMb) # (hidden_dim2, batch_size)
+      h2 = T.nnet.relu(self.M.dot(T.flatten(Du, outdim=2).T) + self.Mb) # (hidden_dim2, batch_size)
 
-    O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, vocab_size)
+    O = T.exp(self.E.dot(h2) + self.Eb).T # (batch_size, vocab_size)
 
     predictions = T.argmax(O, axis=1)
     xent = T.sum(T.nnet.categorical_crossentropy(O, Y))
@@ -309,17 +313,17 @@ def read_alignment(align_file):
       n_align.append(n)
   return n_align
 
-def get_left_src(src, a, w):
+def get_left_src(nz, src, a, w):
   lsc =  src[a - w if a - w > 0 else 0: a]
   if len(lsc) < w:
-    lsc = [nz.v2i[SOURCE_TYPE, bos]] * (w - len(lsc)) + lsc
+    lsc = [nz.v2i[SOURCE_TYPE, nz.bos]] * (w - len(lsc)) + lsc
   return lsc
 
 
-def get_right_src(src, a, w):
+def get_right_src(nz, src, a, w):
   rsc = src[a+1: a + 1 + w]
   if len(rsc) < w:
-    rsc = rsc + [nz.v2i[SOURCE_TYPE,eos]] * (w - len(rsc))
+    rsc = rsc + [nz.v2i[SOURCE_TYPE, nz.eos]] * (w - len(rsc))
   return rsc
 
 def get_nearest_src_align(ta2sa, idx):
@@ -329,7 +333,7 @@ def get_nearest_src_align(ta2sa, idx):
       idx_d_dist = idx + (dist * d)
       if idx_d_dist in ta2sa and len(ta2sa[idx_d_dist]) == 1:
         #if target word is aligned to just one source word
-        return ta2sa[idx_d_dist]
+        return ta2sa[idx_d_dist][0]
       elif idx_d_dist in ta2sa and len(ta2sa[idx_d_dist]) > 1:
         #if target word is aligned to many source words, pick the middle alignment
         _s = sorted(ta2sa[idx_d_dist])
@@ -349,7 +353,7 @@ def get_effective_align(align, idx):
     sa2ta[sa] = _t
   if idx in ta2sa and len(ta2sa[idx]) == 1:
     #if target word is aligned to just one source word
-    return ta2sa[idx]
+    return ta2sa[idx][0]
   elif idx in ta2sa and len(ta2sa[idx]) > 1:
     #if target word is aligned to many source words, pick the middle alignment
     _s = sorted(ta2sa[idx])
@@ -368,18 +372,25 @@ def get_effective_align(align, idx):
 def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5, sw_size=4):
   input_contexts = []
   output_labels = []
-  for trg, src, align in zip(trnz_target, trnz_source):
+  for trg, src, align in zip(trnz_target, trnz_source, trnz_align):
     for idx in range(1, len(trg)):
       tc = [] # contains target context
       sc = [] # contains source context
       tc = trg[idx - tc_size if idx - tc_size > 0 else 0 :idx]
       if len(tc) < tc_size:
-        tc = [nz.v2i[TARGET_TYPE,bos]] * (tc_size - len(tc))
+        tc_pad = [nz.v2i[TARGET_TYPE,nz.bos]] * (tc_size - len(tc))
+        tc = tc_pad + tc
       assert len(tc) == tc_size
       h_a = get_effective_align(align, idx)
-      sc = get_left_src(src, h_a,sw_size)+ [src[h_a]] + get_right_src(src, h_a, sw_size)
-      assert len(fullc) == tc_size + 1 + (2 * sw_size)
+      if h_a < len(src):
+        pass
+      else:
+        pdb.set_trace()
+      sc = get_left_src(nz, src, h_a,sw_size) 
+      sc += [src[h_a]] 
+      sc += get_right_src(nz, src, h_a, sw_size)
       fullc = sc + tc
+      assert len(fullc) == tc_size + 1 + (2 * sw_size)
       input_contexts.append(fullc)
       output_labels.append(trg[idx])
   return input_contexts, output_labels
@@ -389,12 +400,12 @@ def main(options):
   logging.info("start collecting vocabulary")
   #indexed_ngrams = []
   #predictions = []
-  nz = numberizer(limit = options.vocab_size, unk = UNK, bos = BOS, eos = EOS)
+  nz = numberizer(limit = options.vocab_size)
   nz.build_vocab(TARGET_TYPE,options.target_file)
   nz.build_vocab(SOURCE_TYPE,options.source_file)
   trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
-  trnx_align = read_alignment(options.align_file) 
+  trnz_align = read_alignment(options.align_file) 
   input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)

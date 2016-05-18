@@ -8,6 +8,7 @@
 # April, 2016
 
 from collections import Counter
+import codecs
 import logging
 import pickle
 import sys
@@ -37,11 +38,11 @@ class numberizer:
     self.t2c = {}
     self.s2i = {}
 
-  def build_vocab(vocab_type, text_file):
+  def build_vocab(self,vocab_type, text_file):
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
         for word in line.split():
-          self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word)), len(self.v2i)
+          self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word), len(self.v2i))
           if vocab_type == 'target':
             self.t2i[word] = self.t2i.get(word, len(self.t2i))
             self.t2c[word] = self.t2c.get(word, 0) + 1
@@ -50,12 +51,12 @@ class numberizer:
     self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
     self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
 
-  def numberize_sent(vocab_type, text_file):
+  def numberize_sent(self,vocab_type, text_file):
     n_sent = []
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
         n = [self.v2i[vocab_type,w] for w in line.split()]
-        n = [self.v2i[vocab_type,bos]] + n + [self.v2i[vocab_type,eos]]
+        n = [self.v2i[vocab_type, self.bos]] + n + [self.v2i[vocab_type, self.eos]]
         n_sent.append(n)
     return n_sent
 
