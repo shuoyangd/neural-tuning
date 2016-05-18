@@ -1,4 +1,4 @@
-# nplm -- a theano re-implementation of (Vaswani et al. 2013)
+# nnjm -- a theano re-implementation of (Vaswani et al. 2013)
 # 
 # proudly developed by
 # Shuoyang Ding @ Johns Hopkins University
@@ -115,21 +115,6 @@ class nplm:
     h2 = T.nnet.relu(self.M.dot(h1) + MMb) # (hidden_dim2, batch_size)
     O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, vocab_size)
 
-    """
-    # x is integer vector representing the n-gram -- each element is an index of a word
-    def fprop_step(x, D, CC, M, E, b, n_gram, word_dim):
-      Du = D.take(x, axis=1)
-      h1 = T.nnet.relu(CC.dot(T.reshape(Du, (n_gram * word_dim, 1))))
-      h2 = T.nnet.relu(M.dot(h1))
-      return T.exp(E.dot(h2) + b).T[0] # r for raw distribution, a.k.a unnormalized 
-
-    (O, _) = theano.scan(fn = fprop_step,
-      sequences = X,
-      outputs_info = None,
-      non_sequences = [self.D, CC, self.M, self.E, self.b, self.n_gram, self.word_dim],
-      strict=True) # (batch_size, vocab_size)
-    """
-
     predictions = T.argmax(O, axis=1)
     xent = T.sum(T.nnet.categorical_crossentropy(O, Y))
 
@@ -197,11 +182,12 @@ def dump(net, model_dir, options, vocab):
     model_file.write("input_vocab_size {0}\n".format(options.vocab_size))
     model_file.write("output_vocab_size {0}\n".format(options.vocab_size))
     model_file.write("input_embedding_dimension {0}\n".format(options.word_dim))
-    model_file.write("num_hidden {0}\n".format(options.hidden_dim1))
+    model_file.write("num_hidden {0}\n".format(options.hidden_dim1)) #TODO: does not match nnjm in moses!!
     model_file.write("output_embedding_dimension {0}\n".format(options.hidden_dim2))
     model_file.write("activation_function rectifier\n\n") # currently only supporting rectifier... 
 
     # input_vocab
+    #TODO: figure out why this is not dumped in moses' nnjm
     model_file.write("\\input_vocab\n")
     for word in vocab:
       model_file.write(word + "\n")
