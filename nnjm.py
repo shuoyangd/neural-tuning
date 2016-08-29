@@ -1,15 +1,12 @@
-#
-#NNJM -- a theano re-implementation of (Vaswani et al. 2013)
+# NNJM -- a theano re-implementation of (Vaswani et al. 2013)
 # 
-# proudly developed by
-# Shuoyang Ding @ Johns Hopkins University
-# 
-# March, 2016
+# August 2016
 
 import argparse
 from collections import Counter
 import codecs
 import logging
+from loss import NCE
 from numberizer import numberizer
 from numberizer import TARGET_TYPE, SOURCE_TYPE
 import numpy as np
@@ -121,7 +118,10 @@ class NNJM:
   def __theano_init__(self):
     X = T.lmatrix('X') # (batch_size, n_gram)
     Y = T.lvector('Y') # (batch_size, )
-    N = T.lmatrix('N') # (batch_size, noise_sample_size)
+    # N = T.lmatrix('N') # (batch_size, noise_sample_size)
+    # XXX: new NCE loss shares one sample across the whole batch
+    N = T.lvector('N')
+
     #if hidden_dim1 > 0:
     #  CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
     #CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
@@ -143,6 +143,7 @@ class NNJM:
     predictions = T.argmax(O, axis=1)
     xent = T.sum(T.nnet.categorical_crossentropy(O, Y))
 
+    """
     YY = Y + self.offset # offset indexes used to construct pw and qw
     NN = N + T.tile(self.offset, (self.noise_sample_size, 1)).T # offset indexes used to construct pwb and qwb
 
@@ -153,8 +154,13 @@ class NNJM:
     
     pd1 = pw / (pw + self.noise_sample_size * qw) # (batch_size, )
     pd0 = (self.noise_sample_size * qwb) / (pwb + self.noise_sample_size * qwb) # (batch_size, noise_sample_size)
+    """
 
-    loss = T.sum(T.log(pd1) + T.sum(T.log(pd0), axis=1)) # scalar
+    # XXX: use new NCE loss introduced in http://www.aclweb.org/anthology/N16-1145
+    lossfunc = NCE(self.batch_size, self.vocab_size, self.noise_dist, self.noise_sample_size)
+    loss = lossfunc.evaluate(O, Y, N)
+    # loss = T.sum(T.log(pd1) + T.sum(T.log(pd0), axis=1)) # scalar
+
     dD = T.grad(loss, self.D)
     if self.hidden_dim1 > 0:
       dC = T.grad(loss, self.C)
@@ -294,13 +300,14 @@ def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist):
     if len(indexed_ngrams) - start >= options.batch_size:
       X = indexed_ngrams[start: start + options.batch_size]
       Y = predictions[start: start + options.batch_size]
-      N = np.array(rand.distint(noise_dist, (options.batch_size, options.noise_sample_size)), dtype='int64') # (batch_size, noise_sample_size)
+      N = np.array(rand.distint(noise_dist, (options.noise_sample_size,)), dtype='int64') # (batch_size, noise_sample_size)
+      # N = np.array(rand.distint(noise_dist, (options.batch_size, options.noise_sample_size)), dtype='int64') # (batch_size, noise_sample_size)
       net.sgd(X, Y, N, floatX(options.learning_rate))
     instance_count += options.batch_size
     batch_count += 1
     if batch_count % 1 == 0:
       logging.info("{0} instances seen".format(instance_count))
-  N = np.array(rand.distint(noise_dist, (len(indexed_ngrams), options.noise_sample_size)))
+  # N = np.array(rand.distint(noise_dist, (len(indexed_ngrams), options.noise_sample_size)))
   # total_loss = net.loss(indexed_ngrams, predictions, N)
   # logging.info("epoch {0} finished with NCE loss {1}".format(epoch, total_loss))
   logging.info("epoch {0} finished".format(epoch))
