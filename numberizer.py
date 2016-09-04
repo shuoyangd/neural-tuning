@@ -41,12 +41,24 @@ class numberizer:
   def build_vocab(self,vocab_type, text_file):
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
+        # augment bos and eos
+        self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
+        self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
+        if vocab_type == TARGET_TYPE:
+            self.t2i[self.bos] = self.t2i.get(self.bos, len(self.t2i))
+            self.t2i[self.eos] = self.t2i.get(self.eos, len(self.t2i))
+            self.t2c[self.bos] = self.t2c.get(self.bos, 0) + 1
+            self.t2c[self.eos] = self.t2c.get(self.eos, 0) + 1
+        elif vocab_type == SOURCE_TYPE:
+            self.s2i[self.bos] = self.s2i.get(self.bos, len(self.s2i))
+            self.s2i[self.eos] = self.s2i.get(self.eos, len(self.s2i))
+        # collect "real" vocab
         for word in line.split():
           self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word), len(self.v2i))
-          if vocab_type == 'target':
+          if vocab_type == TARGET_TYPE:
             self.t2i[word] = self.t2i.get(word, len(self.t2i))
             self.t2c[word] = self.t2c.get(word, 0) + 1
-          else:
+          elif vocab_type == SOURCE_TYPE:
             self.s2i[word] = self.s2i.get(word, len(self.s2i))
     self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
     self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
