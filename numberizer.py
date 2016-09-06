@@ -10,6 +10,7 @@
 from collections import Counter
 import codecs
 import logging
+import operator
 import pickle
 import sys
 
@@ -77,9 +78,9 @@ class numberizer:
     n_sent = []
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
-        n = [self.v2i[vocab_type,w] for w in line.split()]
+        # n = [self.v2i[vocab_type,w] for w in line.split()]
         n = [self.v2i.get((vocab_type, w), (vocab_type, 'UNK')) for w in line.split()]
-        #n = [self.v2i[vocab_type, self.bos]] + n + [self.v2i[vocab_type, self.eos]]
+        n = [self.v2i[vocab_type, self.bos]] + n + [self.v2i[vocab_type, self.eos]]
         n_sent.append(n)
     return n_sent
 
