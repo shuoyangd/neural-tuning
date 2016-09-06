@@ -33,30 +33,46 @@ class numberizer:
     self.bos = bos
     self.eos = eos
     self.dont_augment_bos_eos = not bos or not eos
-    self.v2i = {}
+    self.v2i = {} # contains both target and source words and maps to an id key (word_type, word) --> value id
     self.t2i = {}
     self.t2c = {}
+    self.s2c = {}
     self.s2i = {}
 
   def build_vocab(self,vocab_type, text_file):
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
         for word in line.split():
-          self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word), len(self.v2i))
+          #self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word), len(self.v2i))
           if vocab_type == 'target':
             self.t2i[word] = self.t2i.get(word, len(self.t2i))
-            self.t2c[word] = self.t2c.get(word, 0) + 1
+            #self.t2c[word] = self.t2c.get(word, 0) + 1
           else:
-            self.s2i[word] = self.s2i.get(word, len(self.s2i))
+            self.s2c[word] = self.s2c.get(word, 0) + 1
+            #self.s2i[word] = self.s2i.get(word, len(self.s2i))
+
+    if vocab_type == 'target':
+        count_sorted = sorted(self.t2c.items(), key=operator.itemgetter(1), reverse=True) 
+        for _idx, (w,c)  in enumerate(count_sorted[:self.limit]):
+            self.t2i[w] = _idx 
+            self.v2i[vocab_type, w] = self.v2i.get((vocab_type, w), len(self.v2i))
+    else:
+        count_sorted = sorted(self.s2c.items(), key=operator.itemgetter(1), reverse=True) 
+        for _idx, (w,c)  in enumerate(count_sorted[:self.limit]):
+            self.s2i[w] = _idx 
+            self.v2i[vocab_type, w] = self.v2i.get((vocab_type, w), len(self.v2i))
+
     self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
     self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
+    self.v2i[vocab_type, 'UNK'] = self.v2i.get((vocab_type, 'UNK'), len(self.v2i))
 
   def numberize_sent(self,vocab_type, text_file):
     n_sent = []
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
         n = [self.v2i[vocab_type,w] for w in line.split()]
-        n = [self.v2i[vocab_type, self.bos]] + n + [self.v2i[vocab_type, self.eos]]
+        n = [self.v2i.get((vocab_type, w), (vocab_type, 'UNK')) for w in line.split()]
+        #n = [self.v2i[vocab_type, self.bos]] + n + [self.v2i[vocab_type, self.eos]]
         n_sent.append(n)
     return n_sent
 
