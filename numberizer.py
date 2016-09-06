@@ -40,31 +40,38 @@ class numberizer:
     self.s2i = {}
 
   def build_vocab(self,vocab_type, text_file):
+    self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
+    self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
+    self.v2i[vocab_type, 'UNK'] = self.v2i.get((vocab_type, 'UNK'), len(self.v2i))
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
+        # augment bos and eos
+        if vocab_type == TARGET_TYPE:
+            self.t2c[self.bos] = self.t2c.get(self.bos, 0) + 1
+            self.t2c[self.eos] = self.t2c.get(self.eos, 0) + 1
+        else: 
+            self.s2i[self.bos] = self.s2c.get(self.bos, 0) + 1 #self.s2i.get(self.bos, len(self.s2i))
+            self.s2i[self.eos] = self.s2c.get(self.eos, 0) + 1 #self.s2i.get(self.eos, len(self.s2i))
+        # collect "real" vocab
         for word in line.split():
           #self.v2i[vocab_type, word] = self.v2i.get((vocab_type, word), len(self.v2i))
-          if vocab_type == 'target':
-            self.t2i[word] = self.t2i.get(word, len(self.t2i))
-            #self.t2c[word] = self.t2c.get(word, 0) + 1
+          if vocab_type == TARGET_TYPE:
+            self.t2c[word] = self.t2c.get(word, 0) + 1
+            #self.t2i[word] = self.t2i.get(word, len(self.t2i))
           else:
             self.s2c[word] = self.s2c.get(word, 0) + 1
             #self.s2i[word] = self.s2i.get(word, len(self.s2i))
 
-    if vocab_type == 'target':
+    if vocab_type == TARGET_TYPE:
         count_sorted = sorted(self.t2c.items(), key=operator.itemgetter(1), reverse=True) 
         for _idx, (w,c)  in enumerate(count_sorted[:self.limit]):
             self.t2i[w] = _idx 
             self.v2i[vocab_type, w] = self.v2i.get((vocab_type, w), len(self.v2i))
     else:
         count_sorted = sorted(self.s2c.items(), key=operator.itemgetter(1), reverse=True) 
-        for _idx, (w,c)  in enumerate(count_sorted[:self.limit]):
+        for _idx, (w,c)  in enumerate(count_sorted[:self.limit]): #TODO: should we limit source vocab also?
             self.s2i[w] = _idx 
             self.v2i[vocab_type, w] = self.v2i.get((vocab_type, w), len(self.v2i))
-
-    self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
-    self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
-    self.v2i[vocab_type, 'UNK'] = self.v2i.get((vocab_type, 'UNK'), len(self.v2i))
 
   def numberize_sent(self,vocab_type, text_file):
     n_sent = []

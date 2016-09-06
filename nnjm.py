@@ -72,13 +72,15 @@ class NNJM:
     self.hidden_dim2 = hidden_dim2
     self.noise_sample_size = noise_sample_size
     self.batch_size = batch_size
-    self.noise_dist = noise_dist if noise_dist != [] else np.array([floatX(1. / vocab_size)] * vocab_size, dtype=floatX)
+    self.noise_dist = theano.shared(noise_dist, name='nd') \
+        if noise_dist != [] \
+        else theano.shared(np.array([floatX(1. / vocab_size)] * vocab_size, dtype=floatX), name = 'nd')
     self.D = theano.shared(
         np.random.uniform(-0.05, 0.05, (word_dim, vocab_size)).astype(floatX),
         name = 'D')
     if hidden_dim1 > 0:
       self.C = theano.shared(
-          np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim * self.ngram)).astype(floatX),
+          np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim * self.n_gram)).astype(floatX),
           name = 'C') 
     else:
       pass
@@ -124,21 +126,21 @@ class NNJM:
 
     #if hidden_dim1 > 0:
     #  CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
-    #CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
+    CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
     #else:
     #pass
-    #MMb = T.tile(self.Mb, (1, self.batch_size)) # (hidden_dim2, batch_size)
-    #EEb = T.tile(self.Eb, (1, self.batch_size)) # (vocab_size, batch_size)
+    MMb = T.tile(self.Mb, (1, self.batch_size)) # (hidden_dim2, batch_size)
+    EEb = T.tile(self.Eb, (1, self.batch_size)) # (vocab_size, batch_size)
     
     Du = self.D.take(X.T, axis = 1).T # (batch_size, n_gram, word_dim)
 
     if self.hidden_dim1 > 0:
-      h1 = T.nnet.relu(self.C.dot(T.flatten(Du, outdim=2).T) + self.Cb) # (hidden_dim1, batch_size) #TODO: T.flatten look into it...
-      h2 = T.nnet.relu(self.M.dot(h1) + Mb) # (hidden_dim2, batch_size)
+      h1 = T.nnet.relu(self.C.dot(T.flatten(Du, outdim=2).T) + CCb) # (hidden_dim1, batch_size) #TODO: T.flatten look into it...
+      h2 = T.nnet.relu(self.M.dot(h1) + MMb) # (hidden_dim2, batch_size)
     else:
-      h2 = T.nnet.relu(self.M.dot(T.flatten(Du, outdim=2).T) + self.Mb) # (hidden_dim2, batch_size)
+      h2 = T.nnet.relu(self.M.dot(T.flatten(Du, outdim=2).T) + MMb) # (hidden_dim2, batch_size)
 
-    O = T.exp(self.E.dot(h2) + self.Eb).T # (batch_size, vocab_size)
+    O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, vocab_size)
 
     predictions = T.argmax(O, axis=1)
     xent = T.sum(T.nnet.categorical_crossentropy(O, Y))
@@ -206,18 +208,20 @@ class NNJM:
 # ==================== END OF NNJM CLASS DEF ====================
 
 def dump_matrix(m, model_file):
-    shape = m.shape
-    if len(shape) == 1:
-      shape = (shape, 1)
+    np.savetxt(model_file, m, fmt="%.6f", delimiter='\t')
 
-    index = 0
-    for i in range(0, shape[0]):
-      model_file.write("{0:.6f}".format(m.take(index)))
-      for j in range(1, shape[1]):
-        index += 1
-        model_file.write('\t')
-        model_file.write("{0:.6f}".format(m.take(index)))
-      model_file.write('\n')
+def dump_vocab(vocab_dir, vocab):
+    src_vocab_file = open(vocab_dir + ".source", 'w')
+    trg_vocab_file = open(vocab_dir + ".target", 'w') 
+    for word in vocab:
+      if word[0] == TARGET_TYPE: 
+        src_vocab_file.write((word[1] + "\n").encode('utf-8'))
+      elif word[0] == SOURCE_TYPE:
+        trg_vocab_file.write((word[1] + "\n").encode('utf-8'))
+    src_vocab_file.write('\n')
+    trg_vocab_file.write('\n')
+    src_vocab_file.close()
+    trg_vocab_file.close()
 
 def dump(net, model_dir, options, vocab):
     model_file = open(model_dir, 'w')
@@ -233,32 +237,20 @@ def dump(net, model_dir, options, vocab):
     model_file.write("output_embedding_dimension {0}\n".format(options.hidden_dim2))
     model_file.write("activation_function rectifier\n\n") # currently only supporting rectifier... 
 
-    # input_vocab
-    #TODO: figure out why this is not dumped in moses' NNJM
-    model_file.write("\\input_vocab\n")
-    for word in vocab:
-      model_file.write(word + "\n")
-    model_file.write("\n")
-    model_file.write("\\output_vocab\n")
-    for word in vocab:
-      model_file.write(word + "\n")
-    model_file.write("\n")
-
     if net.hidden_dim1 > 0:
       [D, C, M, E, Cb, Mb, Eb] = net.weights()
     else:
       [D, M, E, Mb, Eb] = net.weights()
 
-
     # input_embeddings
     model_file.write("\\input_embeddings\n")
-    dump_matrix(D.T, model_file)
+    dump_matrix(np.transpose(D), model_file)
     model_file.write("\n")
 
     if net.hidden_dim1 > 0:
     # hidden_weights 1
       model_file.write("\\hidden_weights 1\n")
-      dump_matrix(C.T, model_file)
+      dump_matrix(np.transpose(C), model_file)
       model_file.write("\n")
 
       # hidden_biases 1
@@ -270,7 +262,7 @@ def dump(net, model_dir, options, vocab):
 
     # hidden_weights 2
     model_file.write("\\hidden_weights 2\n")
-    dump_matrix(M.T, model_file)
+    dump_matrix(np.transpose(M), model_file)
     model_file.write("\n")
 
     # hidden_biases 2
@@ -367,7 +359,7 @@ def get_effective_align(align, idx):
     return _s[int(len(_s)/2)]
   elif idx not in ta2sa:
     #if the target word is aligned to null
-    nearest_sa = get_nearest_trg_align(ta2sa, idx)
+    nearest_sa = get_nearest_src_align(ta2sa, idx)
     return nearest_sa
   else:
     raise NotImplementedError
@@ -423,21 +415,22 @@ def main(options):
   logging.info("vocabulary collection finished")
 
   # training
-  if len(vocab) < options.vocab_size:
-    logging.warning("The actual vocabulary size of the training corpus {0} ".format(len(vocab)) + 
+  if len(nz.v2i) < options.vocab_size:
+    logging.warning("The actual vocabulary size of the training corpus {0} ".format(len(nz.v2i)) + 
       "is smaller than the vocab_size option as specified {0}. ".format(options.vocab_size) + 
       "We don't know what will happen to NNJM in that case, but for safety we'll decrease vocab_size as the vocabulary size in the corpus.")
-    options.vocab_size = len(vocab)
+    options.vocab_size = len(nz.v2i)
   logging.info("start training with n-gram size {0}, vocab size {1}, learning rate {2}, "
-      .format(options.n_gram, len(vocab), options.learning_rate) + 
+      .format(options.n_gram, len(nz.v2i), options.learning_rate) + 
       "word dimension {0}, hidden dimension 1 {1}, hidden dimension 2 {2}, noise sample size {3}"
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
-  net = NNJM(options.n_gram, len(vocab), options.word_dim, options.hidden_dim1, options.hidden_dim2,
+  net = NNJM(options.n_gram, len(nz.v2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
+  dump_vocab(options.working_dir + "/vocab", nz.v2i.keys())
   for epoch in range(1, options.max_epoch + 1):
     sgd(input_contexts, output_labels, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
-    	dump(net, options.working_dir + "/NNJM.model." + str(epoch), options, vocab)
+    	dump(net, options.working_dir + "/NNJM.model." + str(epoch), options, nz.v2i.keys())
   logging.info("training finished")
 
 if __name__ == "__main__":
