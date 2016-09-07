@@ -52,9 +52,9 @@ class numberizer:
     load_file.close()
 
   def build_vocab(self,vocab_type, text_file):
-    self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
-    self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
-    self.v2i[vocab_type, 'UNK'] = self.v2i.get((vocab_type, 'UNK'), len(self.v2i))
+    # self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
+    # self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
+    # self.v2i[vocab_type, self.unk] = self.v2i.get((vocab_type, self.unk), len(self.v2i))
     w2c = {} #temporarily holds words to count...
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
@@ -77,23 +77,27 @@ class numberizer:
 
     if vocab_type == TARGET_TYPE:
         count_sorted = sorted(w2c.items(), key=operator.itemgetter(1), reverse=True) 
-        for _idx, (w,c)  in enumerate(count_sorted[:self.limit]):
-            self.t2i[w] = _idx 
+        for (w,c)  in count_sorted[:self.limit]:
             self.t2c[w] = c
             self.v2i[vocab_type, w] = self.v2i.get((vocab_type, w), len(self.v2i))
+            self.t2i[w] = self.v2i[vocab_type, w]
+        self.v2i[vocab_type, self.unk] = self.v2i.get((vocab_type, self.unk), len(self.v2i))
+        self.t2i[self.unk] = self.v2i[vocab_type, self.unk]
     else:
         count_sorted = sorted(w2c.items(), key=operator.itemgetter(1), reverse=True) 
-        for _idx, (w,c)  in enumerate(count_sorted[:self.limit]): #TODO: should we limit source vocab also?
-            self.s2i[w] = _idx 
+        for (w,c)  in count_sorted[:self.limit]: #TODO: should we limit source vocab also?
             self.s2c[w] = c
             self.v2i[vocab_type, w] = self.v2i.get((vocab_type, w), len(self.v2i))
+            self.s2i[w] = self.v2i[vocab_type, w]
+        self.v2i[vocab_type, self.unk] = self.v2i.get((vocab_type, self.unk), len(self.v2i))
+        self.s2i[self.unk] = self.v2i[vocab_type, self.unk]
 
   def numberize_sent(self,vocab_type, text_file):
     n_sent = []
     with codecs.open(text_file, 'r', 'utf8') as f:
       for line in f:
         # n = [self.v2i[vocab_type,w] for w in line.split()]
-        n = [self.v2i.get((vocab_type, w), (vocab_type, 'UNK')) for w in line.split()]
+        n = [self.v2i.get((vocab_type, w), (vocab_type, self.unk)) for w in line.split()]
         n = [self.v2i[vocab_type, self.bos]] + n + [self.v2i[vocab_type, self.eos]]
         n_sent.append(n)
     return n_sent
