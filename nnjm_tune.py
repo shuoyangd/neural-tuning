@@ -7,6 +7,7 @@ from collections import Counter
 import codecs
 import logging
 from loss import NCE
+from nnjm import NNJM
 from utils.numberizer import numberizer
 from utils.numberizer import TARGET_TYPE, SOURCE_TYPE
 import numpy as np
@@ -60,150 +61,6 @@ if theano.config.floatX=='float32':
   floatX = np.float32
 else:
   floatX = np.float64
-
-class NNJM:
-
-  # the default noise_distribution is uniform
-  def __init__(self, n_gram, vocab_size, word_dim=150, hidden_dim1=512, hidden_dim2=512, noise_sample_size=100, batch_size=1000, noise_dist=[]):
-    self.n_gram = n_gram
-    self.vocab_size = vocab_size
-    self.word_dim = word_dim
-    self.hidden_dim1 = hidden_dim1
-    self.hidden_dim2 = hidden_dim2
-    self.noise_sample_size = noise_sample_size
-    self.batch_size = batch_size
-    self.noise_dist = theano.shared(noise_dist, name='nd') \
-        if noise_dist != [] \
-        else theano.shared(np.array([floatX(1. / vocab_size)] * vocab_size, dtype=floatX), name = 'nd')
-    self.D = theano.shared(
-        np.random.uniform(-0.05, 0.05, (word_dim, vocab_size)).astype(floatX),
-        name = 'D')
-    if hidden_dim1 > 0:
-      self.C = theano.shared(
-          np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim * self.n_gram)).astype(floatX),
-          name = 'C') 
-    else:
-      pass
-
-    if hidden_dim1 > 0:
-      self.M = theano.shared(
-          np.random.uniform(-0.05, 0.05, (hidden_dim2, hidden_dim1)).astype(floatX),
-          name = 'M')
-    else:
-      self.M = theano.shared(np.random.uniform(-0.05, 0.05, (hidden_dim2,  word_dim * self.ngram)).astype(floatX), name='M') 
-
-    self.E = theano.shared(
-        np.random.uniform(-0.05, 0.05, (vocab_size, hidden_dim2)).astype(floatX),
-        name = 'E')
-
-    if hidden_dim1 > 0:
-      self.Cb = theano.shared(
-          np.array([[-np.log(vocab_size)] * hidden_dim1]).astype(floatX).T,
-          name = 'Cb')
-    else:
-      pass
-
-    self.Mb = theano.shared(
-        np.array([[-np.log(vocab_size)] * hidden_dim2]).astype(floatX).T,
-        name = 'Mb')
-
-    self.Eb = theano.shared(
-        np.array([[-np.log(vocab_size)] * vocab_size]).astype(floatX).T,
-        name = 'Eb')
-
-    self.offset = theano.shared(
-        np.array(np.arange(0, batch_size * self.vocab_size, self.vocab_size)),
-        name = "offset")
-
-    self.__theano_init__()
-
-  def __theano_init__(self):
-    X = T.lmatrix('X') # (batch_size, n_gram)
-    Y = T.lvector('Y') # (batch_size, )
-    # N = T.lmatrix('N') # (batch_size, noise_sample_size)
-    # XXX: new NCE loss shares one sample across the whole batch
-    N = T.lvector('N')
-
-    #if hidden_dim1 > 0:
-    #  CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
-    CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
-    #else:
-    #pass
-    MMb = T.tile(self.Mb, (1, self.batch_size)) # (hidden_dim2, batch_size)
-    EEb = T.tile(self.Eb, (1, self.batch_size)) # (vocab_size, batch_size)
-    
-    Du = self.D.take(X.T, axis = 1).T # (batch_size, n_gram, word_dim)
-
-    if self.hidden_dim1 > 0:
-      h1 = T.nnet.relu(self.C.dot(T.flatten(Du, outdim=2).T) + CCb) # (hidden_dim1, batch_size) #TODO: T.flatten look into it...
-      h2 = T.nnet.relu(self.M.dot(h1) + MMb) # (hidden_dim2, batch_size)
-    else:
-      h2 = T.nnet.relu(self.M.dot(T.flatten(Du, outdim=2).T) + MMb) # (hidden_dim2, batch_size)
-
-    O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, vocab_size)
-
-    predictions = T.argmax(O, axis=1)
-    xent = T.sum(T.nnet.categorical_crossentropy(O, Y))
-
-    """
-    YY = Y + self.offset # offset indexes used to construct pw and qw
-    NN = N + T.tile(self.offset, (self.noise_sample_size, 1)).T # offset indexes used to construct pwb and qwb
-
-    pw = T.take(O, YY) # (batch_size, )
-    qw = T.take(self.noise_dist, Y) # (batch_size, )
-    pwb = T.take(O, NN) # (batch_size, noise_sample_size)
-    qwb = T.take(self.noise_dist, N) # (batch_size, noise_sample_size)
-    
-    pd1 = pw / (pw + self.noise_sample_size * qw) # (batch_size, )
-    pd0 = (self.noise_sample_size * qwb) / (pwb + self.noise_sample_size * qwb) # (batch_size, noise_sample_size)
-    """
-
-    # XXX: use new NCE loss introduced in http://www.aclweb.org/anthology/N16-1145
-    lossfunc = NCE(self.batch_size, self.vocab_size, self.noise_dist, self.noise_sample_size)
-    loss = lossfunc.evaluate(O, Y, N)
-    # loss = T.sum(T.log(pd1) + T.sum(T.log(pd0), axis=1)) # scalar
-
-    dD = T.grad(loss, self.D)
-    if self.hidden_dim1 > 0:
-      dC = T.grad(loss, self.C)
-    else:
-      pass
-    dM = T.grad(loss, self.M)
-    dE = T.grad(loss, self.E)
-    dCb = T.grad(loss, self.Cb)
-    dMb = T.grad(loss, self.Mb)
-    dEb = T.grad(loss, self.Eb)
-    
-    lr = T.scalar('lr', dtype=theano.config.floatX)
-
-    self.pred = theano.function(inputs = [X], outputs = predictions)
-    self.xent = theano.function(inputs = [X, Y], outputs = xent)
-    self.loss = theano.function(inputs = [X, Y, N], outputs = loss)
-    if self.hidden_dim1 > 0:
-      self.backprop = theano.function(inputs = [X, Y, N], outputs = [dD, dC, dM, dE, dCb, dMb, dEb])
-      self.sgd = theano.function(inputs = [X, Y, N, lr], outputs = [], 
-          updates = [
-              (self.D, self.D + lr * dD),
-              (self.C, self.C + lr * dC),
-              (self.M, self.M + lr * dM),
-              (self.E, self.E + lr * dE),
-              (self.Cb, self.Cb + lr * dCb), 
-              (self.Mb, self.Mb + lr * dMb), 
-              (self.Eb, self.Eb + lr * dEb), 
-              ])
-      self.weights = theano.function(inputs = [], outputs = [self.D, self.C, self.M, self.E, self.Cb, self.Mb, self.Eb])
-    else:
-      self.backprop = theano.function(inputs = [X, Y, N], outputs = [dD, dM, dE, dMb, dEb])
-      self.sgd = theano.function(inputs = [X, Y, N, lr], outputs = [], 
-          updates = [
-              (self.D, self.D + lr * dD),
-              (self.M, self.M + lr * dM),
-              (self.E, self.E + lr * dE),
-              (self.Mb, self.Mb + lr * dMb), 
-              (self.Eb, self.Eb + lr * dEb), 
-              ])
-      self.weights = theano.function(inputs = [], outputs = [self.D,  self.M, self.E,  self.Mb, self.Eb])
-
   
 # ==================== END OF NNJM CLASS DEF ====================
 
@@ -312,60 +169,46 @@ def read_alignment(align_file):
       n_align.append(n)
   return n_align
 
-def get_left_src(nz, src, a, w):
-  lsc =  src[a - w if a - w > 0 else 0: a]
-  if len(lsc) < w:
-    lsc = [nz.v2i[SOURCE_TYPE, nz.bos]] * (w - len(lsc)) + lsc
-  return lsc
 
-
-def get_right_src(nz, src, a, w):
-  rsc = src[a+1: a + 1 + w]
-  if len(rsc) < w:
-    rsc = rsc + [nz.v2i[SOURCE_TYPE, nz.eos]] * (w - len(rsc))
-  return rsc
-
-def get_nearest_src_align(ta2sa, idx):
-  assert idx not in ta2sa
-  for dist in range(1,100):
-    for d in [+1, -1]:
-      idx_d_dist = idx + (dist * d)
-      if idx_d_dist in ta2sa and len(ta2sa[idx_d_dist]) == 1:
-        #if target word is aligned to just one source word
-        return ta2sa[idx_d_dist][0]
-      elif idx_d_dist in ta2sa and len(ta2sa[idx_d_dist]) > 1:
-        #if target word is aligned to many source words, pick the middle alignment
-        _s = sorted(ta2sa[idx_d_dist])
-        return _s[int(len(_s)/2)]
-      else:
-        pass
-
-def get_effective_align(align, idx):
-  ta2sa = {}
-  sa2ta = {}
-  for sa,ta in align:
-    _s = ta2sa.get(ta, [])
-    _s.append(sa)
-    ta2sa[ta] = _s
-    _t = sa2ta.get(sa, [])
-    _t.append(ta)
-    sa2ta[sa] = _t
-  if idx in ta2sa and len(ta2sa[idx]) == 1:
-    #if target word is aligned to just one source word
-    return ta2sa[idx][0]
-  elif idx in ta2sa and len(ta2sa[idx]) > 1:
-    #if target word is aligned to many source words, pick the middle alignment
-    _s = sorted(ta2sa[idx])
-    return _s[int(len(_s)/2)]
-  elif idx not in ta2sa:
-    #if the target word is aligned to null
-    nearest_sa = get_nearest_src_align(ta2sa, idx)
-    return nearest_sa
+def get_training_tuple(idx, trg, src, align, tc_size, sw_size): 
+  tc = [] # contains target context
+  sc = [] # contains source context
+  tc = trg[idx - tc_size if idx - tc_size > 0 else 0 :idx]
+  if len(tc) < tc_size:
+    tc_pad = [nz.v2i[TARGET_TYPE,nz.bos]] * (tc_size - len(tc))
+    tc = tc_pad + tc
+  assert len(tc) == tc_size
+  h_a = get_effective_align(align, idx)
+  if h_a < len(src):
+    pass
   else:
-    raise NotImplementedError
+    pdb.set_trace()
+  sc = get_left_src(nz, src, h_a,sw_size) 
+  sc += [src[h_a]] 
+  sc += get_right_src(nz, src, h_a, sw_size)
+  fullc = sc + tc
+  assert len(fullc) == tc_size + 1 + (2 * sw_size)
+  return fullc, trg[idx]
 
-
-
+def make_tuning_instances(nz, n_best_alignments, n_best_targets, n_best_sources,n=200, tc_size=5, sw_size=4):
+  positive_input_contexts = []
+  positive_output_labels = []
+  negative_input_contexts = []
+  negative_output_labels = []
+  for n_idx, (trg, src, align) in enumerate(zip(n_best_targets, n_best_sources, n_best_alignments)):
+    if n_idx % 200 == 0: # convert this to a range if we want top k and bottom k in the n-best 
+      for idx in range(1, len(trg)):
+        fullc, trg_idx = get_training_tuple(idx, trg, src, align, tc_size, sw_size)
+        positive_input_contexts.append(fullc)
+        positive_output_labels.append(trg[idx])
+    elif n_idx % 200 == 199:
+      for idx in range(1, len(trg)):
+          fullc, trg_idx = get_training_tuple(idx, trg, src, align, tc_size, sw_size)
+          negative_input_contexts.append(fullc)
+          negative_output_labels.append(trg_idx)
+    else:
+        pass
+  return positive_input_contexts, positive_output_labels, negative_input_contexts, negative_output_labels
 
 
 def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5, sw_size=4):
@@ -373,22 +216,7 @@ def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5,
   output_labels = []
   for trg, src, align in zip(trnz_target, trnz_source, trnz_align):
     for idx in range(1, len(trg)):
-      tc = [] # contains target context
-      sc = [] # contains source context
-      tc = trg[idx - tc_size if idx - tc_size > 0 else 0 :idx]
-      if len(tc) < tc_size:
-        tc_pad = [nz.v2i[TARGET_TYPE,nz.bos]] * (tc_size - len(tc))
-        tc = tc_pad + tc
-      assert len(tc) == tc_size
-      h_a = get_effective_align(align, idx)
-      if h_a < len(src):
-        pass
-      else:
-        pdb.set_trace()
-      sc = get_left_src(nz, src, h_a,sw_size) 
-      sc += [src[h_a]] 
-      sc += get_right_src(nz, src, h_a, sw_size)
-      fullc = sc + tc
+      fullc, trg_idx = get_training_tuple(idx, trg, src, align, tc_size, sw_size)
       assert len(fullc) == tc_size + 1 + (2 * sw_size)
       input_contexts.append(fullc)
       output_labels.append(trg[idx])
@@ -399,13 +227,16 @@ def main(options):
   logging.info("start collecting vocabulary")
   #indexed_ngrams = []
   #predictions = []
-  nz = numberizer(limit = options.vocab_size)
-  nz.build_vocab(TARGET_TYPE,options.target_file)
-  nz.build_vocab(SOURCE_TYPE,options.source_file)
+  nz = numberizer()
+  nz.load('path/to/numberized/corpus')
+  #nz = numberizer(limit = options.vocab_size)
+  #nz.build_vocab(TARGET_TYPE,options.target_file)
+  #nz.build_vocab(SOURCE_TYPE,options.source_file)
   trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
   trnz_align = read_alignment(options.align_file) 
-  input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
+  pos_contexts, pos_outputs, neg_contexts, neg_outputs = make_tuning_instances(nz, 
+  #input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
   for tw, tw_count in nz.t2c.iteritems():
