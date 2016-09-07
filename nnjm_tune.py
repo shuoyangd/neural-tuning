@@ -211,17 +211,6 @@ def make_tuning_instances(nz, n_best_alignments, n_best_targets, n_best_sources,
   return positive_input_contexts, positive_output_labels, negative_input_contexts, negative_output_labels
 
 
-def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5, sw_size=4):
-  input_contexts = []
-  output_labels = []
-  for trg, src, align in zip(trnz_target, trnz_source, trnz_align):
-    for idx in range(1, len(trg)):
-      fullc, trg_idx = get_training_tuple(idx, trg, src, align, tc_size, sw_size)
-      assert len(fullc) == tc_size + 1 + (2 * sw_size)
-      input_contexts.append(fullc)
-      output_labels.append(trg[idx])
-  return input_contexts, output_labels
-
 def main(options):
   # collecting vocab
   logging.info("start collecting vocabulary")
@@ -235,7 +224,8 @@ def main(options):
   trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
   trnz_align = read_alignment(options.align_file) 
-  pos_contexts, pos_outputs, neg_contexts, neg_outputs = make_tuning_instances(nz, 
+  pos_contexts, pos_outputs, neg_contexts, neg_outputs = make_tuning_instances(nz,trnz_align, trnz_target, trnz_source) 
+  #TODO: proceed from this point on...
   #input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
