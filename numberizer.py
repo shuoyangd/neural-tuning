@@ -11,7 +11,7 @@ from collections import Counter
 import codecs
 import logging
 import operator
-import pickle
+import cPickle as pickle
 import sys
 
 logging.basicConfig(
@@ -39,6 +39,17 @@ class numberizer:
     self.t2c = {}
     self.s2c = {}
     self.s2i = {}
+
+  def save(self, save_file):
+    save_file = open(save_file, 'wb')
+    pickle.dump(self, save_file)
+    save_file.flush()
+    save_file.close()
+  
+  def load(self, load_file):
+    load_file = open(load_file, 'rb')
+    self = picke.load(load_file)
+    load_file.close()
 
   def build_vocab(self,vocab_type, text_file):
     self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
