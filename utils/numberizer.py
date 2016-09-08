@@ -83,6 +83,7 @@ class numberizer:
             self.t2i[w] = self.v2i[vocab_type, w]
         self.v2i[vocab_type, self.unk] = self.v2i.get((vocab_type, self.unk), len(self.v2i))
         self.t2i[self.unk] = self.v2i[vocab_type, self.unk]
+        self.t2c[self.unk] = self.v2i[vocab_type, self.unk]
     else:
         count_sorted = sorted(w2c.items(), key=operator.itemgetter(1), reverse=True) 
         for (w,c)  in count_sorted[:self.limit]: #TODO: should we limit source vocab also?
@@ -91,6 +92,7 @@ class numberizer:
             self.s2i[w] = self.v2i[vocab_type, w]
         self.v2i[vocab_type, self.unk] = self.v2i.get((vocab_type, self.unk), len(self.v2i))
         self.s2i[self.unk] = self.v2i[vocab_type, self.unk]
+        self.s2c[self.unk] = self.v2i[vocab_type, self.unk]
 
   def numberize_sent(self,vocab_type, text_file):
     n_sent = []
