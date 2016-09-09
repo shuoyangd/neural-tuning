@@ -31,9 +31,9 @@ parser.add_argument("--alignment-file", "-a", dest="align_file", metavar="PATH",
 parser.add_argument("--working-dir", "-w", dest="working_dir", metavar="PATH", help="Directory used to dump models etc.", required=True)
 parser.add_argument("--validation-file", dest="validation_file", metavar="PATH", help="Validation corpus used for stopping criteria.")
 parser.add_argument("--learning-rate", dest="learning_rate", type=float, metavar="FLOAT", help="Learning rate used to update weights (default = 1.0).")
-parser.add_argument("--vocab-size", dest="vocab_size", type=int, metavar="INT", help="Vocabulary size of the language model (default = 500000).")
+parser.add_argument("--vocab-size", dest="vocab_size", type=int, metavar="INT", help="Vocabulary size of the language model (default = 16000).")
 parser.add_argument("--word-dim", dest="word_dim", type=int, metavar="INT", help="Dimension of word embedding (default = 150).")
-parser.add_argument("--hidden-dim1", dest="hidden_dim1", type=int, metavar="INT", help="Dimension of hidden layer 1 (default = 150).")
+parser.add_argument("--hidden-dim1", dest="hidden_dim1", type=int, metavar="INT", help="Dimension of hidden layer 1. Pass dimension 0 if you only want 1 hidden layer. (default = 0).")
 parser.add_argument("--hidden-dim2", dest="hidden_dim2", type=int, metavar="INT", help="Dimension of hidden layer 2 (default = 750).")
 parser.add_argument("--noise-sample-size", "-k", dest="noise_sample_size", type=int, metavar="INT", help="Size of the noise sample per training instance for NCE (default = 100).")
 parser.add_argument("--n-gram", "-n", dest="n_gram", type=int, metavar="INT", help="Size of the N-gram (default = 5).")
@@ -45,15 +45,15 @@ parser.add_argument("--gradient-check", dest="gradient_check", type=int, metavar
 parser.set_defaults(
   learning_rate=0.001,
   word_dim=150,
-  vocab_size=500000,
-  hidden_dim1=512,
-  hidden_dim2=512,
+  vocab_size=16000,
+  hidden_dim1=0,
+  hidden_dim2=750,
   noise_sample_size=100,
   sw_size=4,
   tc_size=5,
   n_gram=14,
   max_epoch=5,
-  batch_size=128,
+  batch_size=1000,
   save_interval=1)
 
 if theano.config.floatX=='float32':
@@ -64,9 +64,10 @@ else:
 class NNJM:
 
   # the default noise_distribution is uniform
-  def __init__(self, n_gram, vocab_size, word_dim=150, hidden_dim1=512, hidden_dim2=512, noise_sample_size=100, batch_size=1000, noise_dist=[]):
+  def __init__(self, n_gram, vocab_size, target_vocab_size, word_dim=150, hidden_dim1=512, hidden_dim2=512, noise_sample_size=100, batch_size=1000, noise_dist=[]):
     self.n_gram = n_gram
     self.vocab_size = vocab_size
+    self.target_vocab_size = target_vocab_size
     self.word_dim = word_dim
     self.hidden_dim1 = hidden_dim1
     self.hidden_dim2 = hidden_dim2
@@ -90,10 +91,10 @@ class NNJM:
           np.random.uniform(-0.05, 0.05, (hidden_dim2, hidden_dim1)).astype(floatX),
           name = 'M')
     else:
-      self.M = theano.shared(np.random.uniform(-0.05, 0.05, (hidden_dim2,  word_dim * self.ngram)).astype(floatX), name='M') 
+      self.M = theano.shared(np.random.uniform(-0.05, 0.05, (hidden_dim2,  word_dim * self.n_gram)).astype(floatX), name='M') 
 
     self.E = theano.shared(
-        np.random.uniform(-0.05, 0.05, (vocab_size, hidden_dim2)).astype(floatX),
+        np.random.uniform(-0.05, 0.05, (target_vocab_size, hidden_dim2)).astype(floatX),
         name = 'E')
 
     if hidden_dim1 > 0:
@@ -108,12 +109,8 @@ class NNJM:
         name = 'Mb')
 
     self.Eb = theano.shared(
-        np.array([[-np.log(vocab_size)] * vocab_size]).astype(floatX).T,
+        np.array([[-np.log(target_vocab_size)] * vocab_size]).astype(floatX).T,
         name = 'Eb')
-
-    self.offset = theano.shared(
-        np.array(np.arange(0, batch_size * self.vocab_size, self.vocab_size)),
-        name = "offset")
 
     self.__theano_init__()
 
@@ -124,13 +121,14 @@ class NNJM:
     # XXX: new NCE loss shares one sample across the whole batch
     N = T.lvector('N')
 
-    #if hidden_dim1 > 0:
-    #  CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
-    CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
-    #else:
-    #pass
+    if self.hidden_dim1 > 0:
+      CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
+      CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
+    else:
+      pass
+
     MMb = T.tile(self.Mb, (1, self.batch_size)) # (hidden_dim2, batch_size)
-    EEb = T.tile(self.Eb, (1, self.batch_size)) # (vocab_size, batch_size)
+    EEb = T.tile(self.Eb, (1, self.batch_size)) # (target_vocab_size, batch_size)
     
     Du = self.D.take(X.T, axis = 1).T # (batch_size, n_gram, word_dim)
 
@@ -140,7 +138,7 @@ class NNJM:
     else:
       h2 = T.nnet.relu(self.M.dot(T.flatten(Du, outdim=2).T) + MMb) # (hidden_dim2, batch_size)
 
-    O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, vocab_size)
+    O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, target_vocab_size)
 
     predictions = T.argmax(O, axis=1)
     xent = T.sum(T.nnet.categorical_crossentropy(O, Y))
@@ -159,7 +157,7 @@ class NNJM:
     """
 
     # XXX: use new NCE loss introduced in http://www.aclweb.org/anthology/N16-1145
-    lossfunc = NCE(self.batch_size, self.vocab_size, self.noise_dist, self.noise_sample_size)
+    lossfunc = NCE(self.batch_size, self.target_vocab_size, self.noise_dist, self.noise_sample_size)
     loss = lossfunc.evaluate(O, Y, N)
     # loss = T.sum(T.log(pd1) + T.sum(T.log(pd0), axis=1)) # scalar
 
@@ -170,7 +168,8 @@ class NNJM:
       pass
     dM = T.grad(loss, self.M)
     dE = T.grad(loss, self.E)
-    dCb = T.grad(loss, self.Cb)
+    if self.hidden_dim1 > 0:
+      dCb = T.grad(loss, self.Cb)
     dMb = T.grad(loss, self.Mb)
     dEb = T.grad(loss, self.Eb)
     
@@ -231,7 +230,7 @@ def dump(net, model_dir, options, vocab):
     model_file.write("version 1\n")
     model_file.write("ngram_size {0}\n".format(options.n_gram))
     model_file.write("input_vocab_size {0}\n".format(options.vocab_size))
-    model_file.write("output_vocab_size {0}\n".format(options.vocab_size))
+    model_file.write("output_vocab_size {0}\n".format(options.target_vocab_size))
     model_file.write("input_embedding_dimension {0}\n".format(options.word_dim))
     model_file.write("num_hidden {0}\n".format(options.hidden_dim1)) #TODO: does not match NNJM in moses!!
     model_file.write("output_embedding_dimension {0}\n".format(options.hidden_dim2))
@@ -247,10 +246,10 @@ def dump(net, model_dir, options, vocab):
     dump_matrix(np.transpose(D), model_file)
     model_file.write("\n")
 
-    if net.hidden_dim1 > 0:
     # hidden_weights 1
+    if net.hidden_dim1 > 0:
       model_file.write("\\hidden_weights 1\n")
-      dump_matrix(np.transpose(C), model_file)
+      dump_matrix(C, model_file)
       model_file.write("\n")
 
       # hidden_biases 1
@@ -258,17 +257,36 @@ def dump(net, model_dir, options, vocab):
       dump_matrix(Cb, model_file)
       model_file.write("\n")
     else:
-      pass
+      # hidden_weights 2
+      model_file.write("\\hidden_weights 1\n")
+      dump_matrix(M, model_file)
+      model_file.write("\n")
+  
+      # hidden_biases 2
+      model_file.write("\\hidden_biases 1\n")
+      dump_matrix(Mb, model_file)
+      model_file.write("\n")
 
-    # hidden_weights 2
-    model_file.write("\\hidden_weights 2\n")
-    dump_matrix(np.transpose(M), model_file)
-    model_file.write("\n")
-
-    # hidden_biases 2
-    model_file.write("\\hidden_biases 2\n")
-    dump_matrix(Mb, model_file)
-    model_file.write("\n")
+    # Made compliant to Moses-accepted format
+    # Note hidden_dim1 in the options is defined differently as in model file
+    if net.hidden_dim1 > 0: 
+      # hidden_weights 2
+      model_file.write("\\hidden_weights 2\n")
+      dump_matrix(M, model_file)
+      model_file.write("\n")
+  
+      # hidden_biases 2
+      model_file.write("\\hidden_biases 2\n")
+      dump_matrix(Mb, model_file)
+      model_file.write("\n")
+    else:
+      model_file.write("\\hidden_weights 2\n")
+      model_file.write("0.5\n")
+      model_file.write("\n")
+      
+      model_file.write("\\hidden_biases 2\n")
+      model_file.write("0.5\n")
+      model_file.write("\n")
 
     # output_weights
     model_file.write("\\output_weights\n")
@@ -395,6 +413,7 @@ def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5,
   return input_contexts, output_labels
 
 def main(options):
+  options.n_gram -= 1
   # collecting vocab
   logging.info("start collecting vocabulary")
   #indexed_ngrams = []
@@ -415,16 +434,18 @@ def main(options):
   logging.info("vocabulary collection finished")
 
   # training
-  if len(nz.v2i) < options.vocab_size:
+  if len(nz.v2i) < 2 * options.vocab_size:
     logging.warning("The actual vocabulary size of the training corpus {0} ".format(len(nz.v2i)) + 
       "is smaller than the vocab_size option as specified {0}. ".format(options.vocab_size) + 
       "We don't know what will happen to NNJM in that case, but for safety we'll decrease vocab_size as the vocabulary size in the corpus.")
-    options.vocab_size = len(nz.v2i)
+  options.vocab_size = len(nz.v2i)
+  options.target_vocab_size = len(nz.t2i)
+
   logging.info("start training with n-gram size {0}, vocab size {1}, learning rate {2}, "
       .format(options.n_gram, len(nz.v2i), options.learning_rate) + 
       "word dimension {0}, hidden dimension 1 {1}, hidden dimension 2 {2}, noise sample size {3}"
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
-  net = NNJM(options.n_gram, len(nz.v2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
+  net = NNJM(options.n_gram, len(nz.v2i), len(nz.t2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
   dump_vocab(options.working_dir + "/vocab", nz.v2i.keys())
   for epoch in range(1, options.max_epoch + 1):
