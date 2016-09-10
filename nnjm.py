@@ -31,12 +31,13 @@ parser.add_argument("--alignment-file", "-a", dest="align_file", metavar="PATH",
 parser.add_argument("--working-dir", "-w", dest="working_dir", metavar="PATH", help="Directory used to dump models etc.", required=True)
 parser.add_argument("--validation-file", dest="validation_file", metavar="PATH", help="Validation corpus used for stopping criteria.")
 parser.add_argument("--learning-rate", dest="learning_rate", type=float, metavar="FLOAT", help="Learning rate used to update weights (default = 1.0).")
-parser.add_argument("--vocab-size", dest="vocab_size", type=int, metavar="INT", help="Vocabulary size of the language model (default = 16000).")
+parser.add_argument("--vocab-size", dest="vocab_size", type=int, metavar="INT", help="Vocabulary size on each side of the NNJM  (default = 16000).")
 parser.add_argument("--word-dim", dest="word_dim", type=int, metavar="INT", help="Dimension of word embedding (default = 150).")
-parser.add_argument("--hidden-dim1", dest="hidden_dim1", type=int, metavar="INT", help="Dimension of hidden layer 1. Pass dimension 0 if you only want 1 hidden layer. (default = 0).")
-parser.add_argument("--hidden-dim2", dest="hidden_dim2", type=int, metavar="INT", help="Dimension of hidden layer 2 (default = 750).")
+parser.add_argument("--hidden-dim1", dest="hidden_dim1", type=int, metavar="INT", help="Dimension of hidden layer 1. (default = 750).")
+parser.add_argument("--hidden-dim2", dest="hidden_dim2", type=int, metavar="INT", help="Dimension of hidden layer 2. Pass dimension 0 if you only want 1 hidden layer. (default = 0).")
 parser.add_argument("--noise-sample-size", "-k", dest="noise_sample_size", type=int, metavar="INT", help="Size of the noise sample per training instance for NCE (default = 100).")
-parser.add_argument("--n-gram", "-n", dest="n_gram", type=int, metavar="INT", help="Size of the N-gram (default = 5).")
+parser.add_argument("--sw-size", dest="sw_size", type=int, metavar="INT", help="Size of the one-side source context (default = 4).")
+parser.add_argument("--tc-size", dest="tc_size", type=int, metavar="INT", help="Size of the target context (default = 5).")
 parser.add_argument("--max-epoch", dest="max_epoch", type=int, metavar="INT", help="Maximum number of epochs should be performed during training (default = 5).")
 parser.add_argument("--save-interval", dest="save_interval", type=int, metavar="INT", help="Saving model only for every several epochs (default = 1).")
 parser.add_argument("--batch-size", "-b", dest="batch_size", type=int, metavar="INT", help="Batch size (in sentences) of SGD (default = 1000).")
@@ -51,7 +52,6 @@ parser.set_defaults(
   noise_sample_size=100,
   sw_size=4,
   tc_size=5,
-  n_gram=14,
   max_epoch=5,
   batch_size=1000,
   save_interval=1)
@@ -64,8 +64,8 @@ else:
 class NNJM:
 
   # the default noise_distribution is uniform
-  def __init__(self, n_gram, vocab_size, target_vocab_size, word_dim=150, hidden_dim1=512, hidden_dim2=512, noise_sample_size=100, batch_size=1000, noise_dist=[]):
-    self.n_gram = n_gram
+  def __init__(self, num_inputs, vocab_size, target_vocab_size, word_dim=150, hidden_dim1=150, hidden_dim2=750, noise_sample_size=100, batch_size=1000, noise_dist=[]):
+    self.num_inputs = num_inputs
     self.vocab_size = vocab_size
     self.target_vocab_size = target_vocab_size
     self.word_dim = word_dim
@@ -81,7 +81,7 @@ class NNJM:
         name = 'D')
     if hidden_dim1 > 0:
       self.C = theano.shared(
-          np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim * self.n_gram)).astype(floatX),
+          np.random.uniform(-0.05, 0.05, (hidden_dim1, word_dim * self.num_inputs)).astype(floatX),
           name = 'C') 
     else:
       pass
@@ -91,7 +91,7 @@ class NNJM:
           np.random.uniform(-0.05, 0.05, (hidden_dim2, hidden_dim1)).astype(floatX),
           name = 'M')
     else:
-      self.M = theano.shared(np.random.uniform(-0.05, 0.05, (hidden_dim2,  word_dim * self.n_gram)).astype(floatX), name='M') 
+      self.M = theano.shared(np.random.uniform(-0.05, 0.05, (hidden_dim2,  word_dim * self.num_inputs)).astype(floatX), name='M') 
 
     self.E = theano.shared(
         np.random.uniform(-0.05, 0.05, (target_vocab_size, hidden_dim2)).astype(floatX),
@@ -109,20 +109,20 @@ class NNJM:
         name = 'Mb')
 
     self.Eb = theano.shared(
-        np.array([[-np.log(target_vocab_size)] * vocab_size]).astype(floatX).T,
+        np.array([[-np.log(target_vocab_size)] * target_vocab_size]).astype(floatX).T,
         name = 'Eb')
 
     self.__theano_init__()
 
   def __theano_init__(self):
-    X = T.lmatrix('X') # (batch_size, n_gram)
+    X = T.lmatrix('X') # (batch_size, num_inputs)
     Y = T.lvector('Y') # (batch_size, )
     # N = T.lmatrix('N') # (batch_size, noise_sample_size)
     # XXX: new NCE loss shares one sample across the whole batch
     N = T.lvector('N')
 
     if self.hidden_dim1 > 0:
-      CC = T.tile(self.C, (1, self.n_gram)) # (hidden_dim1, word_dim * n_gram)
+      CC = T.tile(self.C, (1, self.num_inputs)) # (hidden_dim1, word_dim * num_inputs)
       CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
     else:
       pass
@@ -130,7 +130,7 @@ class NNJM:
     MMb = T.tile(self.Mb, (1, self.batch_size)) # (hidden_dim2, batch_size)
     EEb = T.tile(self.Eb, (1, self.batch_size)) # (target_vocab_size, batch_size)
     
-    Du = self.D.take(X.T, axis = 1).T # (batch_size, n_gram, word_dim)
+    Du = self.D.take(X.T, axis = 1).T # (batch_size, num_inputs, word_dim)
 
     if self.hidden_dim1 > 0:
       h1 = T.nnet.relu(self.C.dot(T.flatten(Du, outdim=2).T) + CCb) # (hidden_dim1, batch_size) #TODO: T.flatten look into it...
@@ -301,6 +301,13 @@ def dump(net, model_dir, options, vocab):
     model_file.write("\\end")
     model_file.close()
 
+def shuffle(indexed_ngrams, predictions):
+  logging.info("shuffling data... ")
+  arr = np.arange(len(indexed_ngrams))
+  indexed_ngrams_shuffled = indexed_ngrams[arr, :]
+  predictions_shuffled = predictions[arr]
+  return (indexed_ngrams_shuffled, predictions_shuffled)
+
 def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist):
   logging.info("epoch {0} started".format(epoch))  
   instance_count = 0
@@ -410,10 +417,10 @@ def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5,
       assert len(fullc) == tc_size + 1 + (2 * sw_size)
       input_contexts.append(fullc)
       output_labels.append(trg[idx])
-  return input_contexts, output_labels
+  return np.array(input_contexts), np.array(output_labels)
 
 def main(options):
-  options.n_gram -= 1
+  options.n_gram = options.sw_size * 2 + options.tc_size + 1
   # collecting vocab
   logging.info("start collecting vocabulary")
   #indexed_ngrams = []
@@ -445,11 +452,12 @@ def main(options):
       .format(options.n_gram, len(nz.v2i), options.learning_rate) + 
       "word dimension {0}, hidden dimension 1 {1}, hidden dimension 2 {2}, noise sample size {3}"
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
-  net = NNJM(options.n_gram, len(nz.v2i), len(nz.t2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
+  net = NNJM(options.n_gram - 1, len(nz.v2i), len(nz.t2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
   dump_vocab(options.working_dir + "/vocab", nz.v2i.keys())
   for epoch in range(1, options.max_epoch + 1):
-    sgd(input_contexts, output_labels, net, options, epoch, target_unigram_dist)
+    (input_contexts_shuffled, output_labels_shuffled) = shuffle(input_contexts, output_labels)
+    sgd(input_contexts_shuffled, output_labels_shuffled, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
     	dump(net, options.working_dir + "/NNJM.model." + str(epoch), options, nz.v2i.keys())
   logging.info("training finished")
