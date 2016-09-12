@@ -420,7 +420,7 @@ def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5,
   return np.array(input_contexts), np.array(output_labels)
 
 def main(options):
-  options.n_gram = options.sw_size * 2 + options.tc_size + 1
+  options.n_gram = options.sw_size * 2 + options.tc_size + 2
   # collecting vocab
   logging.info("start collecting vocabulary")
   #indexed_ngrams = []
