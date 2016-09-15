@@ -37,7 +37,7 @@ parser.add_argument("--hidden-dim1", dest="hidden_dim1", type=int, metavar="INT"
 parser.add_argument("--hidden-dim2", dest="hidden_dim2", type=int, metavar="INT", help="Dimension of hidden layer 2. Pass dimension 0 if you only want 1 hidden layer. (default = 0).")
 parser.add_argument("--noise-sample-size", "-k", dest="noise_sample_size", type=int, metavar="INT", help="Size of the noise sample per training instance for NCE (default = 100).")
 parser.add_argument("--sw-size", dest="sw_size", type=int, metavar="INT", help="Size of the one-side source context (default = 4).")
-parser.add_argument("--tc-size", dest="tc_size", type=int, metavar="INT", help="Size of the target context (default = 5).")
+parser.add_argument("--tc-size", dest="tc_size", type=int, metavar="INT", help="Size of the target context (default = 4).")
 parser.add_argument("--max-epoch", dest="max_epoch", type=int, metavar="INT", help="Maximum number of epochs should be performed during training (default = 5).")
 parser.add_argument("--save-interval", dest="save_interval", type=int, metavar="INT", help="Saving model only for every several epochs (default = 1).")
 parser.add_argument("--batch-size", "-b", dest="batch_size", type=int, metavar="INT", help="Batch size (in sentences) of SGD (default = 1000).")
@@ -51,7 +51,7 @@ parser.set_defaults(
   hidden_dim2=750,
   noise_sample_size=100,
   sw_size=4,
-  tc_size=5,
+  tc_size=4,
   max_epoch=5,
   batch_size=1000,
   save_interval=1)
@@ -393,7 +393,7 @@ def get_effective_align(align, idx):
 
 
 
-def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=5, sw_size=4):
+def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=4, sw_size=4):
   input_contexts = []
   output_labels = []
   for trg, src, align in zip(trnz_target, trnz_source, trnz_align):
