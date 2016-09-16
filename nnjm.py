@@ -432,6 +432,7 @@ def main(options):
   trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
   trnz_align = read_alignment(options.align_file) 
+  nz.save('path/to/saved/pickled/numberizer')
   input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
