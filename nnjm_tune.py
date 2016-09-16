@@ -208,6 +208,8 @@ def make_tuning_instances(nz, n_best_alignments, n_best_targets, n_best_sources,
           negative_output_labels.append(trg_idx)
     else:
         pass
+  #TODO: make positive and negative example same size (instance size) by creating dummy input,output instances using unk or <s>
+  #TODO: also do the same padding such that we have a nice number of examples integer of examples...
   return positive_input_contexts, positive_output_labels, negative_input_contexts, negative_output_labels
 
 
