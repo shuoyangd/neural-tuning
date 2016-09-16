@@ -8,6 +8,7 @@ import codecs
 import logging
 from loss import NCE
 from nnjm import NNJM
+# TODO: import dump and load
 from utils.numberizer import numberizer
 from utils.numberizer import TARGET_TYPE, SOURCE_TYPE
 import numpy as np
@@ -62,6 +63,30 @@ if theano.config.floatX=='float32':
 else:
   floatX = np.float64
   
+class NNJMBasicTune(NNJM):
+  def __init__(self, num_inputs, vocab_size, target_vocab_size, word_dim=150, hidden_dim1=150, hidden_dim2=750, noise_sample_size=100, batch_size=1000, noise_dist=[]):
+    NNJM.__init__(num_inputs, vocab_size, target_vocab_size, word_dim, hidden_dim1, hidden_dim2, noise_sample_size, batch_size, noise_dist)
+    self.update_pos = theano.function(inputs = [X, Y, N, lr], outputs = [], 
+          updates = [
+              (self.D, self.D + lr * dD),
+              (self.C, self.C + lr * dC),
+              (self.M, self.M + lr * dM),
+              (self.E, self.E + lr * dE),
+              (self.Cb, self.Cb + lr * dCb), 
+              (self.Mb, self.Mb + lr * dMb), 
+              (self.Eb, self.Eb + lr * dEb), 
+              ])
+    self.update_neg = theano.function(inputs = [X, Y, N, lr], outputs = [], 
+          updates = [
+              (self.D, self.D - lr * dD),
+              (self.C, self.C - lr * dC),
+              (self.M, self.M - lr * dM),
+              (self.E, self.E - lr * dE),
+              (self.Cb, self.Cb - lr * dCb), 
+              (self.Mb, self.Mb - lr * dMb), 
+              (self.Eb, self.Eb - lr * dEb), 
+              ])
+
 # ==================== END OF NNJM CLASS DEF ====================
 
 def dump_matrix(m, model_file):
@@ -140,18 +165,21 @@ def dump(net, model_dir, options, vocab):
     model_file.write("\\end")
     model_file.close()
 
-def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist):
+def sgd_epoch(pos_contexts, pos_outputs, neg_contexts, neg_outputs, net, options, epoch, noise_dist):
   logging.info("epoch {0} started".format(epoch))  
   instance_count = 0
   batch_count = 0
   # for performance issue, if the remaining data is smaller than batch_size, we just discard them
-  for start in range(0, len(indexed_ngrams), options.batch_size):
-    if len(indexed_ngrams) - start >= options.batch_size:
-      X = indexed_ngrams[start: start + options.batch_size]
-      Y = predictions[start: start + options.batch_size]
+  for start in range(0, len(pos_contexts), options.batch_size):
+    if len(pos_contexts) - start >= options.batch_size:
+      X_pos = pos_contexts[start: start + options.batch_size]
+      X_neg = neg_contexts[start: start + options.batch_size]
+      Y_pos = pos_outputs[start: start + options.batch_size]
+      Y_neg = neg_outputs[start: start + options.batch_size]
       N = np.array(rand.distint(noise_dist, (options.noise_sample_size,)), dtype='int64') # (batch_size, noise_sample_size)
       # N = np.array(rand.distint(noise_dist, (options.batch_size, options.noise_sample_size)), dtype='int64') # (batch_size, noise_sample_size)
-      net.sgd(X, Y, N, floatX(options.learning_rate))
+      net.update_pos(X_pos, Y_pos, N, floatX(options.learning_rate))
+      net.update_neg(X_neg, Y_neg, N, floatX(options.learning_rate))
     instance_count += options.batch_size
     batch_count += 1
     if batch_count % 1 == 0:
@@ -227,8 +255,6 @@ def main(options):
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
   trnz_align = read_alignment(options.align_file) 
   pos_contexts, pos_outputs, neg_contexts, neg_outputs = make_tuning_instances(nz,trnz_align, trnz_target, trnz_source) 
-  #TODO: proceed from this point on...
-  #input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
   for tw, tw_count in nz.t2c.iteritems():
@@ -251,7 +277,9 @@ def main(options):
       options.noise_sample_size, options.batch_size, target_unigram_dist)
   dump_vocab(options.working_dir + "/vocab", nz.v2i.keys())
   for epoch in range(1, options.max_epoch + 1):
-    sgd(input_contexts, output_labels, net, options, epoch, target_unigram_dist)
+    (pos_contexts_shuffled, pos_outputs_shuffled) = shuffle(pos_contexts, pos_outputs)
+    (neg_contexts_shuffled, neg_outputs_shuffled) = shuffle(neg_contexts, neg_outputs)
+    sgd_epoch(pos_contexts_shuffled, pos_outputs_shuffled, neg_contexts_shuffled, neg_outputs_shuffled, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
     	dump(net, options.working_dir + "/NNJM.model." + str(epoch), options, nz.v2i.keys())
   logging.info("training finished")

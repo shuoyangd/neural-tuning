@@ -203,6 +203,7 @@ class NNJM:
               ])
       self.weights = theano.function(inputs = [], outputs = [self.D,  self.M, self.E,  self.Mb, self.Eb])
 
+# TODO: refator: dump and load function
   
 # ==================== END OF NNJM CLASS DEF ====================
 
