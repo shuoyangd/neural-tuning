@@ -52,7 +52,17 @@ class numberizer:
     load_file.close()
 
   def save_vocab_in_moses_format(self, save_vocab_file):
-      raise NotImplementedError()
+    src_vocab_file = open(save_vocab_file + ".source", 'w')
+    trg_vocab_file = open(save_vocab_file + ".target", 'w') 
+    for word in self.v2i.keys():
+      if word[0] == TARGET_TYPE: 
+        src_vocab_file.write((word[1] + "\n").encode('utf-8'))
+      elif word[0] == SOURCE_TYPE:
+        trg_vocab_file.write((word[1] + "\n").encode('utf-8'))
+    src_vocab_file.write('\n')
+    trg_vocab_file.write('\n')
+    src_vocab_file.close()
+    trg_vocab_file.close()
 
   def build_vocab(self,vocab_type, text_file):
     # self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))

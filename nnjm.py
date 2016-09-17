@@ -502,7 +502,7 @@ def main(options):
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
   net = NNJM(options.n_gram - 1, len(nz.v2i), len(nz.t2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
-  dump_vocab(options.working_dir + "/vocab", nz.v2i.keys())
+  nz.save_vocab_in_moses_format(options.working_dir + "/vocab")
   for epoch in range(1, options.max_epoch + 1):
     (input_contexts_shuffled, output_labels_shuffled) = shuffle(input_contexts, output_labels)
     sgd(input_contexts_shuffled, output_labels_shuffled, net, options, epoch, target_unigram_dist)
