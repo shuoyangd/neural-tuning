@@ -5,6 +5,7 @@
 import argparse
 from collections import Counter
 import codecs
+from io import StringIO
 import logging
 from loss import NCE
 from utils.numberizer import numberizer
@@ -62,6 +63,14 @@ else:
   floatX = np.float64
 
 class NNJM:
+
+  def __init__(self, model_dir, vocab_dir, noise_sample_size, batch_size, noise_dist):
+    self.load(model_dir, voab_dir)
+    self.noise_sample_size = noise_sample_size
+    self.batch_size = batch_size
+    self.noise_dist = theano.shared(noise_dist, name='nd') \
+        if noise_dist != [] \
+        else theano.shared(np.array([floatX(1. / vocab_size)] * vocab_size, dtype=floatX), name = 'nd')
 
   # the default noise_distribution is uniform
   def __init__(self, num_inputs, vocab_size, target_vocab_size, word_dim=150, hidden_dim1=150, hidden_dim2=750, noise_sample_size=100, batch_size=1000, noise_dist=[]):
@@ -203,104 +212,141 @@ class NNJM:
               ])
       self.weights = theano.function(inputs = [], outputs = [self.D,  self.M, self.E,  self.Mb, self.Eb])
 
-# TODO: refator: dump and load function
+  def dump_matrix(self, m, model_file):
+      np.savetxt(model_file, m, fmt="%.6f", delimiter='\t')
   
-# ==================== END OF NNJM CLASS DEF ====================
-
-def dump_matrix(m, model_file):
-    np.savetxt(model_file, m, fmt="%.6f", delimiter='\t')
-
-def dump_vocab(vocab_dir, vocab):
-    src_vocab_file = open(vocab_dir + ".source", 'w')
-    trg_vocab_file = open(vocab_dir + ".target", 'w') 
-    for word in vocab:
-      if word[0] == TARGET_TYPE: 
-        src_vocab_file.write((word[1] + "\n").encode('utf-8'))
-      elif word[0] == SOURCE_TYPE:
-        trg_vocab_file.write((word[1] + "\n").encode('utf-8'))
-    src_vocab_file.write('\n')
-    trg_vocab_file.write('\n')
-    src_vocab_file.close()
-    trg_vocab_file.close()
-
-def dump(net, model_dir, options, vocab):
-    model_file = open(model_dir, 'w')
-
-    # config
-    model_file.write("\\config\n")
-    model_file.write("version 1\n")
-    model_file.write("ngram_size {0}\n".format(options.n_gram))
-    model_file.write("input_vocab_size {0}\n".format(options.vocab_size))
-    model_file.write("output_vocab_size {0}\n".format(options.target_vocab_size))
-    model_file.write("input_embedding_dimension {0}\n".format(options.word_dim))
-    model_file.write("num_hidden {0}\n".format(options.hidden_dim1)) #TODO: does not match NNJM in moses!!
-    model_file.write("output_embedding_dimension {0}\n".format(options.hidden_dim2))
-    model_file.write("activation_function rectifier\n\n") # currently only supporting rectifier... 
-
-    if net.hidden_dim1 > 0:
-      [D, C, M, E, Cb, Mb, Eb] = net.weights()
-    else:
-      [D, M, E, Mb, Eb] = net.weights()
-
-    # input_embeddings
-    model_file.write("\\input_embeddings\n")
-    dump_matrix(np.transpose(D), model_file)
-    model_file.write("\n")
-
-    # hidden_weights 1
-    if net.hidden_dim1 > 0:
-      model_file.write("\\hidden_weights 1\n")
-      dump_matrix(C, model_file)
-      model_file.write("\n")
-
-      # hidden_biases 1
-      model_file.write("\\hidden_biases 1\n")
-      dump_matrix(Cb, model_file)
-      model_file.write("\n")
-    else:
-      # hidden_weights 2
-      model_file.write("\\hidden_weights 1\n")
-      dump_matrix(M, model_file)
+  def dump(self, model_dir):
+      model_file = open(model_dir, 'w')
+  
+      # config
+      model_file.write("\\config\n")
+      model_file.write("version 1\n")
+      model_file.write("ngram_size {0}\n".format(self.n_gram))
+      model_file.write("input_vocab_size {0}\n".format(self.vocab_size))
+      model_file.write("output_vocab_size {0}\n".format(self.target_vocab_size))
+      model_file.write("input_embedding_dimension {0}\n".format(self.word_dim))
+      model_file.write("num_hidden {0}\n".format(self.hidden_dim1))
+      model_file.write("output_embedding_dimension {0}\n".format(self.hidden_dim2))
+      model_file.write("activation_function rectifier\n\n") # currently only supporting rectifier... 
+  
+      if net.hidden_dim1 > 0:
+        [D, C, M, E, Cb, Mb, Eb] = self.weights()
+      else:
+        [D, M, E, Mb, Eb] = self.weights()
+  
+      # input_embeddings
+      model_file.write("\\input_embeddings\n")
+      self.dump_matrix(np.transpose(D), model_file)
       model_file.write("\n")
   
-      # hidden_biases 2
-      model_file.write("\\hidden_biases 1\n")
-      dump_matrix(Mb, model_file)
-      model_file.write("\n")
-
-    # Made compliant to Moses-accepted format
-    # Note hidden_dim1 in the options is defined differently as in model file
-    if net.hidden_dim1 > 0: 
-      # hidden_weights 2
-      model_file.write("\\hidden_weights 2\n")
-      dump_matrix(M, model_file)
+      # hidden_weights 1
+      if net.hidden_dim1 > 0:
+        model_file.write("\\hidden_weights 1\n")
+        self.dump_matrix(C, model_file)
+        model_file.write("\n")
+  
+        # hidden_biases 1
+        model_file.write("\\hidden_biases 1\n")
+        self.dump_matrix(Cb, model_file)
+        model_file.write("\n")
+      else:
+        # hidden_weights 2
+        model_file.write("\\hidden_weights 1\n")
+        self.dump_matrix(M, model_file)
+        model_file.write("\n")
+    
+        # hidden_biases 2
+        model_file.write("\\hidden_biases 1\n")
+        self.dump_matrix(Mb, model_file)
+        model_file.write("\n")
+  
+      # Made compliant to Moses-accepted format
+      # Note hidden_dim1 in the options is defined differently as in model file
+      if net.hidden_dim1 > 0: 
+        # hidden_weights 2
+        model_file.write("\\hidden_weights 2\n")
+        self.dump_matrix(M, model_file)
+        model_file.write("\n")
+    
+        # hidden_biases 2
+        model_file.write("\\hidden_biases 2\n")
+        self.dump_matrix(Mb, model_file)
+        model_file.write("\n")
+      else:
+        model_file.write("\\hidden_weights 2\n")
+        model_file.write("0.5\n")
+        model_file.write("\n")
+        
+        model_file.write("\\hidden_biases 2\n")
+        model_file.write("0.5\n")
+        model_file.write("\n")
+  
+      # output_weights
+      model_file.write("\\output_weights\n")
+      self.dump_matrix(E, model_file)
       model_file.write("\n")
   
-      # hidden_biases 2
-      model_file.write("\\hidden_biases 2\n")
-      dump_matrix(Mb, model_file)
+      # output_biases
+      model_file.write("\\output_biases\n")
+      self.dump_matrix(Eb, model_file)
       model_file.write("\n")
-    else:
-      model_file.write("\\hidden_weights 2\n")
-      model_file.write("0.5\n")
-      model_file.write("\n")
-      
-      model_file.write("\\hidden_biases 2\n")
-      model_file.write("0.5\n")
-      model_file.write("\n")
+  
+      model_file.write("\\end")
+      model_file.close()
 
-    # output_weights
-    model_file.write("\\output_weights\n")
-    dump_matrix(E, model_file)
-    model_file.write("\n")
+  def load_matrix(self, model_file):
+    line = model_file.readline()
+    mstr = ""
+    while line.strip() != "":
+      mstr += line
+      line = model_file.readline()
+    mstrio = StringIO(unicode(mstr))
+    return np.loadtxt(mstrio)
 
-    # output_biases
-    model_file.write("\\output_biases\n")
-    dump_matrix(Eb, model_file)
-    model_file.write("\n")
+  def load(self, model_dir, vocab_dir):
+    model_file = open(model_dir)
+    vocab_file = open(vocab_dir)
+    vocab_size = len(vocab_file.readlines())
+    vocab_file.close()
 
-    model_file.write("\\end")
+    line = model_file.readline()
+    while line.strip() != "\\end":
+      if line.strip() == "\\config":
+        line = model_file.readline()
+        while line.strip() != "":
+          pair = line.strip().split(' ')
+          if pair[0] == "ngram_size":
+            self.num_inputs = int(pair[1])
+          if pair[0] == "input_vocab_size":
+            self.vocab_size = int(pair[1])
+          if pair[0] == "output_vocab_size":
+            self.target_vocab_size = int(pair[1])
+          if pair[0] == "input_embedding_dimension":
+            self.word_dim = int(pair[1])
+          if pair[0] == "num_hidden":
+            self.hidden_dim1 = int(pair[1])
+          if pair[0] == "output_embedding_dimension":
+            self.hidden_dim2 = int(pair[1])
+          line = model_file.readline()
+      if line.strip() == "\\input_embeddings":
+        self.D = np.transpose(self.load_matrix(model_file))
+        line = model_file.readline()
+      if line.strip() == "\\hidden_weights 1":
+        self.C = self.load_matrix(model_file)
+      if line.strip() == "\\hidden_biases 1":
+        self.Cb = self.load_matrix(model_file)
+      if line.strip() == "\\hidden_weights 2":
+        self.M = self.load_matrix(model_file)
+      if line.strip() == "\\hidden_biases 2":
+        self.Mb = self.load_matrix(model_file)
+      if line.strip() == "\\output_weights":
+        self.E = self.load_matrix(model_file)
+      if line.strip() == "\\output_biases":
+        self.Eb = self.load_matrix(model_file)
+
     model_file.close()
+
+# ==================== END OF NNJM CLASS DEF ====================
 
 def shuffle(indexed_ngrams, predictions):
   logging.info("shuffling data... ")
@@ -460,7 +506,7 @@ def main(options):
     (input_contexts_shuffled, output_labels_shuffled) = shuffle(input_contexts, output_labels)
     sgd(input_contexts_shuffled, output_labels_shuffled, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
-    	dump(net, options.working_dir + "/NNJM.model." + str(epoch), options, nz.v2i.keys())
+      net.dump(options.working_dir + "/NNJM.model." + str(epoch), options, nz.v2i.keys())
   logging.info("training finished")
 
 if __name__ == "__main__":
