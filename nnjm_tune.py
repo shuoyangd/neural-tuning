@@ -27,9 +27,9 @@ BOS = "<s>"
 EOS = "</s>"
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--target-file", "-t", dest="target_file", metavar="PATH", help="file with target sentences.", required=True)
-parser.add_argument("--source-file", "-s", dest="source_file", metavar="PATH", help="file with source sentences.", required=True)
-parser.add_argument("--alignment-file", "-a", dest="align_file", metavar="PATH", help="file with word alignments between source-target (giza style).", required=True)
+parser.add_argument("--target-file", "-t", dest="target_file", metavar="PATH", help="file with n-best target sentences.", required=True)
+parser.add_argument("--source-file", "-s", dest="source_file", metavar="PATH", help="file with repeated (aligned to n-best target sentences) source sentences.", required=True)
+parser.add_argument("--alignment-file", "-a", dest="align_file", metavar="PATH", help="file with word alignments between repeated source- n-best target (giza style).", required=True)
 parser.add_argument("--working-dir", "-w", dest="working_dir", metavar="PATH", help="Directory used to dump models etc.", required=True)
 parser.add_argument("--validation-file", dest="validation_file", metavar="PATH", help="Validation corpus used for stopping criteria.")
 parser.add_argument("--learning-rate", dest="learning_rate", type=float, metavar="FLOAT", help="Learning rate used to update weights (default = 1.0).")
@@ -89,81 +89,6 @@ class NNJMBasicTune(NNJM):
 
 # ==================== END OF NNJM CLASS DEF ====================
 
-def dump_matrix(m, model_file):
-    np.savetxt(model_file, m, fmt="%.6f", delimiter='\t')
-
-def dump_vocab(vocab_dir, vocab):
-    src_vocab_file = open(vocab_dir + ".source", 'w')
-    trg_vocab_file = open(vocab_dir + ".target", 'w') 
-    for word in vocab:
-      if word[0] == TARGET_TYPE: 
-        src_vocab_file.write((word[1] + "\n").encode('utf-8'))
-      elif word[0] == SOURCE_TYPE:
-        trg_vocab_file.write((word[1] + "\n").encode('utf-8'))
-    src_vocab_file.write('\n')
-    trg_vocab_file.write('\n')
-    src_vocab_file.close()
-    trg_vocab_file.close()
-
-def dump(net, model_dir, options, vocab):
-    model_file = open(model_dir, 'w')
-
-    # config
-    model_file.write("\\config\n")
-    model_file.write("version 1\n")
-    model_file.write("ngram_size {0}\n".format(options.n_gram))
-    model_file.write("input_vocab_size {0}\n".format(options.vocab_size))
-    model_file.write("output_vocab_size {0}\n".format(options.vocab_size))
-    model_file.write("input_embedding_dimension {0}\n".format(options.word_dim))
-    model_file.write("num_hidden {0}\n".format(options.hidden_dim1)) #TODO: does not match NNJM in moses!!
-    model_file.write("output_embedding_dimension {0}\n".format(options.hidden_dim2))
-    model_file.write("activation_function rectifier\n\n") # currently only supporting rectifier... 
-
-    if net.hidden_dim1 > 0:
-      [D, C, M, E, Cb, Mb, Eb] = net.weights()
-    else:
-      [D, M, E, Mb, Eb] = net.weights()
-
-    # input_embeddings
-    model_file.write("\\input_embeddings\n")
-    dump_matrix(np.transpose(D), model_file)
-    model_file.write("\n")
-
-    if net.hidden_dim1 > 0:
-    # hidden_weights 1
-      model_file.write("\\hidden_weights 1\n")
-      dump_matrix(np.transpose(C), model_file)
-      model_file.write("\n")
-
-      # hidden_biases 1
-      model_file.write("\\hidden_biases 1\n")
-      dump_matrix(Cb, model_file)
-      model_file.write("\n")
-    else:
-      pass
-
-    # hidden_weights 2
-    model_file.write("\\hidden_weights 2\n")
-    dump_matrix(np.transpose(M), model_file)
-    model_file.write("\n")
-
-    # hidden_biases 2
-    model_file.write("\\hidden_biases 2\n")
-    dump_matrix(Mb, model_file)
-    model_file.write("\n")
-
-    # output_weights
-    model_file.write("\\output_weights\n")
-    dump_matrix(E, model_file)
-    model_file.write("\n")
-
-    # output_biases
-    model_file.write("\\output_biases\n")
-    dump_matrix(Eb, model_file)
-    model_file.write("\n")
-
-    model_file.write("\\end")
-    model_file.close()
 
 def sgd_epoch(pos_contexts, pos_outputs, neg_contexts, neg_outputs, net, options, epoch, noise_dist):
   logging.info("epoch {0} started".format(epoch))  
@@ -197,6 +122,10 @@ def read_alignment(align_file):
       n_align.append(n)
   return n_align
 
+def get_dummy_training_tuple(tc_size, sw_size):
+    fullc =  [nz.v2i[SOURCE_TYPE, UNK]] * sw_size + [nz.v2i[TARGET_TYPE, UNK]] * tc_size
+    t = nz.v2i[TARGET_TYPE, UNK]
+    return fullc, t
 
 def get_training_tuple(idx, trg, src, align, tc_size, sw_size): 
   tc = [] # contains target context
@@ -218,7 +147,7 @@ def get_training_tuple(idx, trg, src, align, tc_size, sw_size):
   assert len(fullc) == tc_size + 1 + (2 * sw_size)
   return fullc, trg[idx]
 
-def make_tuning_instances(nz, n_best_alignments, n_best_targets, n_best_sources,n=200, tc_size=5, sw_size=4):
+def make_tuning_instances(nz, n_best_alignments, n_best_targets,batch_size,  n_best_sources,n=200, tc_size=5, sw_size=4):
   positive_input_contexts = []
   positive_output_labels = []
   negative_input_contexts = []
@@ -236,6 +165,30 @@ def make_tuning_instances(nz, n_best_alignments, n_best_targets, n_best_sources,
           negative_output_labels.append(trg_idx)
     else:
         pass
+  #pad to same size
+  max_num_pad = np.abs(len(positive_output_labels) - len(negative_output_labels)) 
+  if max_num_pad > 0:
+    dummy_input_context, dummy_output_label = get_dummy_training_tuple(tc_size, sw_size)
+    dummy_input_contexts = [dummy_input_context] * max_num_pad
+    dummy_output_labels = [dummy_output_label] * max_num_pad
+    if len(positive_output_labels) > len(negative_output_labels):
+      positive_output_labels += dummy_output_labels
+      positive_input_contexts += dummy_input_contexts
+    elif len(negative_output_labels) > len(positive_output_labels):
+      negative_output_labels += dummy_output_labels
+      negative_input_contexts += dummy_input_contexts
+  # pad to be a multiple of batch size
+  num_pad = batch_size - (len(positive_output_labels) % batch_size)
+  if num_pad > 0:
+    dummy_input_context, dummy_output_label = get_dummy_training_tuple(tc_size, sw_size)
+    dummy_input_contexts = [dummy_input_context] * max_num_pad
+    dummy_output_labels = [dummy_output_label] * max_num_pad
+    positive_output_labels += dummy_output_labels
+    positive_input_contexts += dummy_input_contexts
+    negative_output_labels += dummy_output_labels
+    negative_input_contexts += dummy_input_contexts
+  assert len(positive_output_labels) == len(positive_input_contexts) == len(negative_output_labels) == len(negative_input_contexts)
+  assert len(positive_output_labels) % batch_size == 0
   return positive_input_contexts, positive_output_labels, negative_input_contexts, negative_output_labels
 
 
@@ -245,7 +198,7 @@ def main(options):
   #indexed_ngrams = []
   #predictions = []
   nz = numberizer()
-  nz.load('path/to/numberized/corpus')
+  nz.load('path/to/saved/pickled/numberizer')
   #nz = numberizer(limit = options.vocab_size)
   #nz.build_vocab(TARGET_TYPE,options.target_file)
   #nz.build_vocab(SOURCE_TYPE,options.source_file)
@@ -271,9 +224,8 @@ def main(options):
       .format(options.n_gram, len(nz.v2i), options.learning_rate) + 
       "word dimension {0}, hidden dimension 1 {1}, hidden dimension 2 {2}, noise sample size {3}"
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
-  net = NNJM(options.n_gram, len(nz.v2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
+  net = NNJMBasicTune(options.n_gram, len(nz.v2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
-  dump_vocab(options.working_dir + "/vocab", nz.v2i.keys())
   for epoch in range(1, options.max_epoch + 1):
     (pos_contexts_shuffled, pos_outputs_shuffled) = shuffle(pos_contexts, pos_outputs)
     (neg_contexts_shuffled, neg_outputs_shuffled) = shuffle(neg_contexts, neg_outputs)

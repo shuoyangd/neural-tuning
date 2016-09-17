@@ -51,6 +51,9 @@ class numberizer:
     self = picke.load(load_file)
     load_file.close()
 
+  def save_vocab_in_moses_format(self, save_vocab_file):
+      raise NotImplementedError()
+
   def build_vocab(self,vocab_type, text_file):
     # self.v2i[vocab_type, self.bos] = self.v2i.get((vocab_type, self.bos), len(self.v2i))
     # self.v2i[vocab_type, self.eos] = self.v2i.get((vocab_type, self.eos), len(self.v2i))
