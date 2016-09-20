@@ -78,7 +78,8 @@ class NNJMParallelTune():
   def __theano_init__(self):
     X = T.lmatrix('X') # (batch_size, num_inputs)
     X_prime = T.lmatrix('X_prime') # (batch_size, num_inputs)
-    #Y = T.lvector('Y') # (batch_size, )
+    Y = T.lvector('Y') # (batch_size, )
+    Y_prime = T.lvector('Y_prime') # (batch_size, )
     # N = T.lmatrix('N') # (batch_size, noise_sample_size)
     # XXX: new NCE loss shares one sample across the whole batch
     #N = T.lvector('N')
@@ -104,8 +105,8 @@ class NNJMParallelTune():
       h2 = T.nnet.relu(self.M.dot(T.flatten(Du, outdim=2).T) + MMb) # (hidden_dim2, batch_size)
       h2_prime = T.nnet.relu(self.M.dot(T.flatten(Du_prime, outdim=2).T) + MMb) # (hidden_dim2, batch_size)
 
-    O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, target_vocab_size)
-    O_prime = T.exp(self.E.dot(h2_prime) + EEb).T # (batch_size, target_vocab_size)
+    O = T.nnet.softmax(self.E.dot(h2) + EEb).T # (batch_size, target_vocab_size)
+    O_prime = T.nnet.softmax(self.E.dot(h2_prime) + EEb).T # (batch_size, target_vocab_size)
 
     #predictions = T.argmax(O, axis=1)
     #xent = T.sum(T.nnet.categorical_crossentropy(O, Y))
@@ -125,7 +126,9 @@ class NNJMParallelTune():
 
     # XXX: use new NCE loss introduced in http://www.aclweb.org/anthology/N16-1145
     #lossfunc = NCE(self.batch_size, self.target_vocab_size, self.noise_dist, self.noise_sample_size)
-    loss = -T.sum(O - O_prime) #lossfunc.evaluate(O, Y, N)
+    Y_prob = O.take(Y, axis=1)
+    Y_prime_prob = O.take(Y_prime, axis=1)
+    loss = -T.sum(Y_prob - Y_prime_prob) #lossfunc.evaluate(O, Y, N)
     # loss = T.sum(T.log(pd1) + T.sum(T.log(pd0), axis=1)) # scalar
 
     dD = T.grad(loss, self.D)
@@ -144,10 +147,10 @@ class NNJMParallelTune():
 
     #self.pred = theano.function(inputs = [X], outputs = predictions)
     #self.xent = theano.function(inputs = [X, Y], outputs = xent)
-    self.loss = theano.function(inputs = [X,X_prime], outputs = loss)
+    self.loss = theano.function(inputs = [X,Y, X_prime, Y_prime], outputs = loss)
     if self.hidden_dim1 > 0:
-      self.backprop = theano.function(inputs = [X, X_prime], outputs = [dD, dC, dM, dE, dCb, dMb, dEb])
-      self.update = theano.function(inputs = [X, X_prime, lr], outputs = [], 
+      self.backprop = theano.function(inputs = [X, Y, X_prime, Y_prime], outputs = [dD, dC, dM, dE, dCb, dMb, dEb])
+      self.update = theano.function(inputs = [X, Y, X_prime, Y_prime, lr], outputs = [], 
           updates = [
               (self.D, self.D + lr * dD),
               (self.C, self.C + lr * dC),
@@ -159,8 +162,8 @@ class NNJMParallelTune():
               ])
       self.weights = theano.function(inputs = [], outputs = [self.D, self.C, self.M, self.E, self.Cb, self.Mb, self.Eb])
     else:
-      self.backprop = theano.function(inputs = [X, X_prime, N], outputs = [dD, dM, dE, dMb, dEb])
-      self.update = theano.function(inputs = [X, X_prime, lr], outputs = [], 
+      self.backprop = theano.function(inputs = [X, Y, X_prime, Y_prime,  N], outputs = [dD, dM, dE, dMb, dEb])
+      self.update = theano.function(inputs = [X,Y, X_prime,Y_prime, lr], outputs = [], 
           updates = [
               (self.D, self.D + lr * dD),
               (self.M, self.M + lr * dM),
@@ -185,7 +188,7 @@ def sgd_epoch(pos_contexts, pos_outputs, neg_contexts, neg_outputs, net, options
       X_neg = neg_contexts[start: start + options.batch_size]
       Y_pos = pos_outputs[start: start + options.batch_size]
       Y_neg = neg_outputs[start: start + options.batch_size]
-      net.update(X_pos, X_neg, floatX(options.learning_rate))
+      net.update(X_pos, Y_pos, X_neg, Y_neg, floatX(options.learning_rate))
     instance_count += options.batch_size
     batch_count += 1
     if batch_count % 1 == 0:
