@@ -104,8 +104,8 @@ class NNJMParallelTune(NNJM):
       h2 = T.nnet.relu(self.M.dot(T.flatten(Du, outdim=2).T) + MMb) # (hidden_dim2, batch_size)
       h2_prime = T.nnet.relu(self.M.dot(T.flatten(Du_prime, outdim=2).T) + MMb) # (hidden_dim2, batch_size)
 
-    O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, target_vocab_size)
-    O_prime = T.exp(self.E.dot(h2_prime) + EEb).T # (batch_size, target_vocab_size)
+    O = T.nnet.softmax(self.E.dot(h2) + EEb).T # (batch_size, target_vocab_size)
+    O_prime = T.nnet.softmax(self.E.dot(h2_prime) + EEb).T # (batch_size, target_vocab_size)
 
     #predictions = T.argmax(O, axis=1)
     #xent = T.sum(T.nnet.categorical_crossentropy(O, Y))
@@ -146,10 +146,10 @@ class NNJMParallelTune(NNJM):
 
     #self.pred = theano.function(inputs = [X], outputs = predictions)
     #self.xent = theano.function(inputs = [X, Y], outputs = xent)
-    self.loss = theano.function(inputs = [X,X_prime], outputs = loss)
+    self.loss = theano.function(inputs = [X,Y, X_prime, Y_prime], outputs = loss)
     if self.hidden_dim1 > 0:
-      self.backprop = theano.function(inputs = [X, X_prime], outputs = [dD, dC, dM, dE, dCb, dMb, dEb])
-      self.update = theano.function(inputs = [X, X_prime, lr], outputs = [], 
+      self.backprop = theano.function(inputs = [X, Y, X_prime, Y_prime], outputs = [dD, dC, dM, dE, dCb, dMb, dEb])
+      self.update = theano.function(inputs = [X, Y, X_prime, Y_prime, lr], outputs = [], 
           updates = [
               (self.D, self.D + lr * dD),
               (self.C, self.C + lr * dC),
@@ -161,8 +161,8 @@ class NNJMParallelTune(NNJM):
               ])
       self.weights = theano.function(inputs = [], outputs = [self.D, self.C, self.M, self.E, self.Cb, self.Mb, self.Eb])
     else:
-      self.backprop = theano.function(inputs = [X, X_prime, N], outputs = [dD, dM, dE, dMb, dEb])
-      self.update = theano.function(inputs = [X, X_prime, lr], outputs = [], 
+      self.backprop = theano.function(inputs = [X, Y, X_prime, Y_prime,  N], outputs = [dD, dM, dE, dMb, dEb])
+      self.update = theano.function(inputs = [X,Y, X_prime,Y_prime, lr], outputs = [], 
           updates = [
               (self.D, self.D + lr * dD),
               (self.M, self.M + lr * dM),
@@ -187,7 +187,7 @@ def sgd_epoch(pos_contexts, pos_outputs, neg_contexts, neg_outputs, net, options
       X_neg = neg_contexts[start: start + options.batch_size]
       Y_pos = pos_outputs[start: start + options.batch_size]
       Y_neg = neg_outputs[start: start + options.batch_size]
-      net.update(X_pos, X_neg, floatX(options.learning_rate))
+      net.update(X_pos, Y_pos, X_neg, Y_neg, floatX(options.learning_rate))
     instance_count += options.batch_size
     batch_count += 1
     if batch_count % 1 == 0:
