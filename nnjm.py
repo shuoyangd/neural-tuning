@@ -12,6 +12,8 @@ from utils.numberizer import numberizer
 from utils.numberizer import TARGET_TYPE, SOURCE_TYPE
 import numpy as np
 import pdb
+import cPickle as pickle
+import sys
 import theano
 import theano.tensor as T
 import rand
@@ -26,9 +28,11 @@ BOS = "<s>"
 EOS = "</s>"
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--target-file", "-t", dest="target_file", metavar="PATH", help="file with target sentences.", required=True)
-parser.add_argument("--source-file", "-s", dest="source_file", metavar="PATH", help="file with source sentences.", required=True)
-parser.add_argument("--alignment-file", "-a", dest="align_file", metavar="PATH", help="file with word alignments between source-target (giza style).", required=True)
+parser.add_argument("--target-file", "-tf", dest="target_file", metavar="PATH", help="file with target sentences.")
+parser.add_argument("--source-file", "-sf", dest="source_file", metavar="PATH", help="file with source sentences.")
+parser.add_argument("--alignment-file", "-af", dest="align_file", metavar="PATH", help="file with word alignments between source-target (giza style).")
+parser.add_argument("--model-file", "-mf", dest="model_file", metavar="PATH", help="file with already trained model as a initialization (moses style).")
+parser.add_argument("--vocab-file", "-vf", dest="vocab_file", metavar="PATH", help="if you have a pickled dictionary (numberizer), you can use it here.")
 parser.add_argument("--working-dir", "-w", dest="working_dir", metavar="PATH", help="Directory used to dump models etc.", required=True)
 parser.add_argument("--validation-file", dest="validation_file", metavar="PATH", help="Validation corpus used for stopping criteria.")
 parser.add_argument("--learning-rate", dest="learning_rate", type=float, metavar="FLOAT", help="Learning rate used to update weights (default = 1.0).")
@@ -64,8 +68,8 @@ else:
 
 class NNJM:
 
-  def __init__(self, model_dir, vocab_dir, noise_sample_size, batch_size, noise_dist):
-    self.load(model_dir, voab_dir)
+  def load(self, model_dir, noise_sample_size=100, batch_size=1000, noise_dist=[]):
+    self.load_model(model_dir)
     self.noise_sample_size = noise_sample_size
     self.batch_size = batch_size
     self.noise_dist = theano.shared(noise_dist, name='nd') \
@@ -131,7 +135,6 @@ class NNJM:
     N = T.lvector('N')
 
     if self.hidden_dim1 > 0:
-      CC = T.tile(self.C, (1, self.num_inputs)) # (hidden_dim1, word_dim * num_inputs)
       CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
     else:
       pass
@@ -300,15 +303,14 @@ class NNJM:
     while line.strip() != "":
       mstr += line
       line = model_file.readline()
+    logging.info("read all lines for this matrix")
     mstrio = StringIO(unicode(mstr))
     return np.loadtxt(mstrio)
 
-  def load(self, model_dir, vocab_dir):
+  def load_model(self, model_dir):
     model_file = open(model_dir)
-    vocab_file = open(vocab_dir)
-    vocab_size = len(vocab_file.readlines())
-    vocab_file.close()
 
+    logging.info("loading model...")
     line = model_file.readline()
     while line.strip() != "\\end":
       if line.strip() == "\\config":
@@ -327,24 +329,37 @@ class NNJM:
             self.hidden_dim1 = int(pair[1])
           if pair[0] == "output_embedding_dimension":
             self.hidden_dim2 = int(pair[1])
+          logging.info("config loaded")
           line = model_file.readline()
       if line.strip() == "\\input_embeddings":
+        logging.info("input loading...")
         self.D = np.transpose(self.load_matrix(model_file))
-        line = model_file.readline()
+        logging.info("input loaded")
       if line.strip() == "\\hidden_weights 1":
+        logging.info("hidden_W1 loading...")
         self.C = self.load_matrix(model_file)
+        logging.info("hidden_W1 loaded")
       if line.strip() == "\\hidden_biases 1":
+        logging.info("hidden_b1 loading...")
         self.Cb = self.load_matrix(model_file)
+        logging.info("hidden_b1 loaded")
       if line.strip() == "\\hidden_weights 2":
+	logging.info("hidden_W2 loading...")
         self.M = self.load_matrix(model_file)
+	logging.info("hidden_W2 loaded")
       if line.strip() == "\\hidden_biases 2":
+	logging.info("hidden_b2 loading...")
         self.Mb = self.load_matrix(model_file)
+	logging.info("hidden_b2 loaded")
       if line.strip() == "\\output_weights":
+	logging.info("output_W loading...")
         self.E = self.load_matrix(model_file)
+	logging.info("output_W loaded")
       if line.strip() == "\\output_biases":
+	logging.info("output_b loading...")
         self.Eb = self.load_matrix(model_file)
-
-    model_file.close()
+	logging.info("output_b loaded")
+      line = model_file.readline()
 
 # ==================== END OF NNJM CLASS DEF ====================
 
@@ -472,13 +487,18 @@ def main(options):
   logging.info("start collecting vocabulary")
   #indexed_ngrams = []
   #predictions = []
-  nz = numberizer(limit = options.vocab_size)
-  nz.build_vocab(TARGET_TYPE,options.target_file)
-  nz.build_vocab(SOURCE_TYPE,options.source_file)
+  if not options.vocab_file:
+    nz = numberizer(limit = options.vocab_size)
+    nz.build_vocab(TARGET_TYPE,options.target_file)
+    nz.build_vocab(SOURCE_TYPE,options.source_file)
+  else:
+    nz = pickle.load(open(options.vocab_file))
+  
   trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
   trnz_align = read_alignment(options.align_file) 
-  nz.save('path/to/saved/pickled/numberizer')
+  if not options.vocab_file:
+    pickle.dump(nz, open(options.working_dir + "/numberizer.pickle", 'wb'))
   input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
@@ -502,12 +522,14 @@ def main(options):
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
   net = NNJM(options.n_gram - 1, len(nz.v2i), len(nz.t2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
+  if not options.model_file == None:
+    net.load(options.model_file, options.noise_sample_size, options.batch_size, target_unigram_dist)
   nz.save_vocab_in_moses_format(options.working_dir + "/vocab")
   for epoch in range(1, options.max_epoch + 1):
     (input_contexts_shuffled, output_labels_shuffled) = shuffle(input_contexts, output_labels)
     sgd(input_contexts_shuffled, output_labels_shuffled, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
-      net.dump(options.working_dir + "/NNJM.model." + str(epoch), options, nz.v2i.keys())
+      net.dump(options.working_dir + "/NNJM.model." + str(epoch))
   logging.info("training finished")
 
 if __name__ == "__main__":

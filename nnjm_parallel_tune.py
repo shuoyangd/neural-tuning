@@ -62,7 +62,7 @@ if theano.config.floatX=='float32':
 else:
   floatX = np.float64
   
-class NNJMParallelTune():
+class NNJMParallelTune(NNJM):
   def __init__(self, model_dir, vocab_dir, noise_sample_size, batch_size, noise_dist):
     self.load(model_dir, voab_dir)
     self.noise_sample_size = noise_sample_size
@@ -78,13 +78,13 @@ class NNJMParallelTune():
   def __theano_init__(self):
     X = T.lmatrix('X') # (batch_size, num_inputs)
     X_prime = T.lmatrix('X_prime') # (batch_size, num_inputs)
-    #Y = T.lvector('Y') # (batch_size, )
+    Y = T.lvector('Y') # (batch_size, )
+    Y_prime = T.lvector('Y_prime') # (batch_size, )
     # N = T.lmatrix('N') # (batch_size, noise_sample_size)
     # XXX: new NCE loss shares one sample across the whole batch
     #N = T.lvector('N')
 
     if self.hidden_dim1 > 0:
-      #CC = T.tile(self.C, (1, self.num_inputs)) # (hidden_dim1, word_dim * num_inputs) #TODO: when is CC used?
       CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
     else:
       pass
@@ -96,8 +96,8 @@ class NNJMParallelTune():
     Du_prime = self.D.take(X_prime.T, axis = 1).T # (batch_size, num_inputs, word_dim)
 
     if self.hidden_dim1 > 0:
-      h1 = T.nnet.relu(self.C.dot(T.flatten(Du, outdim=2).T) + CCb) # (hidden_dim1, batch_size) #TODO: T.flatten look into it...
-      h1_prime = T.nnet.relu(self.C.dot(T.flatten(Du_prime, outdim=2).T) + CCb) # (hidden_dim1, batch_size) #TODO: T.flatten look into it...
+      h1 = T.nnet.relu(self.C.dot(T.flatten(Du, outdim=2).T) + CCb) # (hidden_dim1, batch_size)
+      h1_prime = T.nnet.relu(self.C.dot(T.flatten(Du_prime, outdim=2).T) + CCb) # (hidden_dim1, batch_size)
       h2 = T.nnet.relu(self.M.dot(h1) + MMb) # (hidden_dim2, batch_size)
       h2_prime = T.nnet.relu(self.M.dot(h1_prime) + MMb) # (hidden_dim2, batch_size)
     else:
@@ -125,7 +125,9 @@ class NNJMParallelTune():
 
     # XXX: use new NCE loss introduced in http://www.aclweb.org/anthology/N16-1145
     #lossfunc = NCE(self.batch_size, self.target_vocab_size, self.noise_dist, self.noise_sample_size)
-    loss = -T.sum(O - O_prime) #lossfunc.evaluate(O, Y, N)
+    Y_loss = O.take(Y, axis=1) #(batch x 1)
+    Y_prime_loss = O_prime.take(Y_prime, axis=1)
+    loss = -T.sum(Y_loss - Y_prime_loss) #lossfunc.evaluate(O, Y, N)
     # loss = T.sum(T.log(pd1) + T.sum(T.log(pd0), axis=1)) # scalar
 
     dD = T.grad(loss, self.D)
