@@ -41,21 +41,21 @@ class numberizer:
     self.s2i = {}
 
   # XXX: YOU CANNOT PICKLE SELF
-  """
-  def save(self, save_file):
+  @staticmethod
+  def save(s, save_file):
     save_file = open(save_file, 'wb')
-    pickle.dump(self, save_file)
+    pickle.dump(s, save_file)
     save_file.flush()
     save_file.close()
-  """
+    return True
   
   # XXX: YOU CANNOT LOAD SELF WITH PICKLE
-  """
-  def load(self, load_file):
+  @staticmethod
+  def load(load_file):
     load_file = open(load_file, 'rb')
-    self = pickle.load(load_file)
+    n = pickle.load(load_file)
     load_file.close()
-  """
+    return n
 
   def save_vocab_in_moses_format(self, save_vocab_file):
     src_vocab_file = open(save_vocab_file + ".source", 'w')
