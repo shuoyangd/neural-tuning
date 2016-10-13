@@ -8,7 +8,6 @@ import codecs
 import logging
 from loss import NCE
 from nnjm import NNJM
-# TODO: import dump and load
 from utils.numberizer import numberizer
 from utils.numberizer import TARGET_TYPE, SOURCE_TYPE
 import numpy as np
@@ -27,6 +26,7 @@ BOS = "<s>"
 EOS = "</s>"
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--numberizer-file", "-z", dest="numberizer_file", metavar="PATH", help="file of pickled vocab object", required=True)
 parser.add_argument("--target-file", "-t", dest="target_file", metavar="PATH", help="file with n-best target sentences.", required=True)
 parser.add_argument("--source-file", "-s", dest="source_file", metavar="PATH", help="file with repeated (aligned to n-best target sentences) source sentences.", required=True)
 parser.add_argument("--alignment-file", "-a", dest="align_file", metavar="PATH", help="file with word alignments between repeated source- n-best target (giza style).", required=True)
@@ -198,7 +198,8 @@ def main(options):
   #indexed_ngrams = []
   #predictions = []
   nz = numberizer()
-  nz.load('path/to/saved/pickled/numberizer')
+  nz = numberizer.load(options.numberizer_file)
+  #nz.load('path/to/saved/pickled/numberizer')
   #nz = numberizer(limit = options.vocab_size)
   #nz.build_vocab(TARGET_TYPE,options.target_file)
   #nz.build_vocab(SOURCE_TYPE,options.source_file)
