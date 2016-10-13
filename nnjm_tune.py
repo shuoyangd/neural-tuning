@@ -10,6 +10,7 @@ from loss import NCE
 from nnjm import NNJM
 from utils.numberizer import numberizer
 from utils.numberizer import TARGET_TYPE, SOURCE_TYPE
+from utils.heuristics import *
 import numpy as np
 import pdb
 import theano
@@ -26,6 +27,7 @@ BOS = "<s>"
 EOS = "</s>"
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--model-file", "-m", dest="model_file", metavar="PATH", help="file of a trained nnjm", required=True)
 parser.add_argument("--numberizer-file", "-z", dest="numberizer_file", metavar="PATH", help="file of pickled vocab object", required=True)
 parser.add_argument("--target-file", "-t", dest="target_file", metavar="PATH", help="file with n-best target sentences.", required=True)
 parser.add_argument("--source-file", "-s", dest="source_file", metavar="PATH", help="file with repeated (aligned to n-best target sentences) source sentences.", required=True)
@@ -65,7 +67,7 @@ else:
   
 class NNJMBasicTune(NNJM):
   def __init__(self, num_inputs, vocab_size, target_vocab_size, word_dim=150, hidden_dim1=150, hidden_dim2=750, noise_sample_size=100, batch_size=1000, noise_dist=[]):
-    NNJM.__init__(num_inputs, vocab_size, target_vocab_size, word_dim, hidden_dim1, hidden_dim2, noise_sample_size, batch_size, noise_dist)
+    NNJM.__init__(self, num_inputs, vocab_size, target_vocab_size, word_dim, hidden_dim1, hidden_dim2, noise_sample_size, batch_size, noise_dist)
     self.update_pos = theano.function(inputs = [X, Y, N, lr], outputs = [], 
           updates = [
               (self.D, self.D + lr * dD),
@@ -122,12 +124,12 @@ def read_alignment(align_file):
       n_align.append(n)
   return n_align
 
-def get_dummy_training_tuple(tc_size, sw_size):
+def get_dummy_training_tuple(nz, tc_size, sw_size):
     fullc =  [nz.v2i[SOURCE_TYPE, UNK]] * sw_size + [nz.v2i[TARGET_TYPE, UNK]] * tc_size
     t = nz.v2i[TARGET_TYPE, UNK]
     return fullc, t
 
-def get_training_tuple(idx, trg, src, align, tc_size, sw_size): 
+def get_training_tuple(nz, idx, trg, src, align, tc_size, sw_size): 
   tc = [] # contains target context
   sc = [] # contains source context
   tc = trg[idx - tc_size if idx - tc_size > 0 else 0 :idx]
@@ -147,20 +149,21 @@ def get_training_tuple(idx, trg, src, align, tc_size, sw_size):
   assert len(fullc) == tc_size + 1 + (2 * sw_size)
   return fullc, trg[idx]
 
-def make_tuning_instances(nz, n_best_alignments, n_best_targets,batch_size,  n_best_sources,n=200, tc_size=5, sw_size=4):
+def make_tuning_instances(nz, n_best_alignments, n_best_targets,  n_best_sources, batch_size, n=200, tc_size=5, sw_size=4):
   positive_input_contexts = []
   positive_output_labels = []
   negative_input_contexts = []
   negative_output_labels = []
+  # pdb.set_trace()
   for n_idx, (trg, src, align) in enumerate(zip(n_best_targets, n_best_sources, n_best_alignments)):
     if n_idx % 200 == 0: # convert this to a range if we want top k and bottom k in the n-best 
       for idx in range(1, len(trg)):
-        fullc, trg_idx = get_training_tuple(idx, trg, src, align, tc_size, sw_size)
+        fullc, trg_idx = get_training_tuple(nz, idx, trg, src, align, tc_size, sw_size)
         positive_input_contexts.append(fullc)
         positive_output_labels.append(trg[idx])
     elif n_idx % 200 == 199:
       for idx in range(1, len(trg)):
-          fullc, trg_idx = get_training_tuple(idx, trg, src, align, tc_size, sw_size)
+          fullc, trg_idx = get_training_tuple(nz, idx, trg, src, align, tc_size, sw_size)
           negative_input_contexts.append(fullc)
           negative_output_labels.append(trg_idx)
     else:
@@ -168,26 +171,30 @@ def make_tuning_instances(nz, n_best_alignments, n_best_targets,batch_size,  n_b
   #pad to same size
   max_num_pad = np.abs(len(positive_output_labels) - len(negative_output_labels)) 
   if max_num_pad > 0:
-    dummy_input_context, dummy_output_label = get_dummy_training_tuple(tc_size, sw_size)
+    dummy_input_context, dummy_output_label = get_dummy_training_tuple(nz, tc_size, sw_size)
     dummy_input_contexts = [dummy_input_context] * max_num_pad
     dummy_output_labels = [dummy_output_label] * max_num_pad
-    if len(positive_output_labels) > len(negative_output_labels):
+    if len(positive_output_labels) < len(negative_output_labels):
       positive_output_labels += dummy_output_labels
       positive_input_contexts += dummy_input_contexts
-    elif len(negative_output_labels) > len(positive_output_labels):
+    elif len(negative_output_labels) < len(positive_output_labels):
       negative_output_labels += dummy_output_labels
       negative_input_contexts += dummy_input_contexts
+    else:
+      pass
+  assert len(positive_output_labels) == len(positive_input_contexts) == len(negative_output_labels) == len(negative_input_contexts)
+
   # pad to be a multiple of batch size
   num_pad = batch_size - (len(positive_output_labels) % batch_size)
   if num_pad > 0:
-    dummy_input_context, dummy_output_label = get_dummy_training_tuple(tc_size, sw_size)
-    dummy_input_contexts = [dummy_input_context] * max_num_pad
-    dummy_output_labels = [dummy_output_label] * max_num_pad
+    dummy_input_context, dummy_output_label = get_dummy_training_tuple(nz, tc_size, sw_size)
+    dummy_input_contexts = [dummy_input_context] * num_pad
+    dummy_output_labels = [dummy_output_label] * num_pad
     positive_output_labels += dummy_output_labels
     positive_input_contexts += dummy_input_contexts
     negative_output_labels += dummy_output_labels
     negative_input_contexts += dummy_input_contexts
-  assert len(positive_output_labels) == len(positive_input_contexts) == len(negative_output_labels) == len(negative_input_contexts)
+  
   assert len(positive_output_labels) % batch_size == 0
   return positive_input_contexts, positive_output_labels, negative_input_contexts, negative_output_labels
 
@@ -206,7 +213,7 @@ def main(options):
   trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
   trnz_align = read_alignment(options.align_file) 
-  pos_contexts, pos_outputs, neg_contexts, neg_outputs = make_tuning_instances(nz,trnz_align, trnz_target, trnz_source) 
+  pos_contexts, pos_outputs, neg_contexts, neg_outputs = make_tuning_instances(nz,trnz_align, trnz_target, trnz_source, options.batch_size) 
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
   for tw, tw_count in nz.t2c.iteritems():
@@ -227,6 +234,7 @@ def main(options):
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
   net = NNJMBasicTune(options.n_gram, len(nz.v2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
+  net.load(options.model_file, options.noise_sample_size, options.batch_size, options.noise_dist)
   for epoch in range(1, options.max_epoch + 1):
     (pos_contexts_shuffled, pos_outputs_shuffled) = shuffle(pos_contexts, pos_outputs)
     (neg_contexts_shuffled, neg_outputs_shuffled) = shuffle(neg_contexts, neg_outputs)
