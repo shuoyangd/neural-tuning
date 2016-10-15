@@ -78,6 +78,7 @@ class NNJM:
 
   # the default noise_distribution is uniform
   def __init__(self, num_inputs, vocab_size, target_vocab_size, word_dim=150, hidden_dim1=150, hidden_dim2=750, noise_sample_size=100, batch_size=1000, noise_dist=[]):
+
     self.num_inputs = num_inputs
     self.vocab_size = vocab_size
     self.target_vocab_size = target_vocab_size
@@ -128,11 +129,11 @@ class NNJM:
     self.__theano_init__()
 
   def __theano_init__(self):
-    X = T.lmatrix('X') # (batch_size, num_inputs)
-    Y = T.lvector('Y') # (batch_size, )
+    self.symX = T.lmatrix('X') # (batch_size, num_inputs)
+    self.symY = T.lvector('Y') # (batch_size, )
     # N = T.lmatrix('N') # (batch_size, noise_sample_size)
     # XXX: new NCE loss shares one sample across the whole batch
-    N = T.lvector('N')
+    self.symN = T.lvector('N')
 
     if self.hidden_dim1 > 0:
       CCb = T.tile(self.Cb, (1, self.batch_size)) # (hidden_dim1, batch_size)
@@ -142,7 +143,7 @@ class NNJM:
     MMb = T.tile(self.Mb, (1, self.batch_size)) # (hidden_dim2, batch_size)
     EEb = T.tile(self.Eb, (1, self.batch_size)) # (target_vocab_size, batch_size)
     
-    Du = self.D.take(X.T, axis = 1).T # (batch_size, num_inputs, word_dim)
+    Du = self.D.take(self.symX.T, axis = 1).T # (batch_size, num_inputs, word_dim)
 
     if self.hidden_dim1 > 0:
       h1 = T.nnet.relu(self.C.dot(T.flatten(Du, outdim=2).T) + CCb) # (hidden_dim1, batch_size) #TODO: T.flatten look into it...
@@ -153,7 +154,7 @@ class NNJM:
     O = T.exp(self.E.dot(h2) + EEb).T # (batch_size, target_vocab_size)
 
     predictions = T.argmax(O, axis=1)
-    xent = T.sum(T.nnet.categorical_crossentropy(O, Y))
+    xent = T.sum(T.nnet.categorical_crossentropy(O, self.symY))
 
     """
     YY = Y + self.offset # offset indexes used to construct pw and qw
@@ -170,50 +171,51 @@ class NNJM:
 
     # XXX: use new NCE loss introduced in http://www.aclweb.org/anthology/N16-1145
     lossfunc = NCE(self.batch_size, self.target_vocab_size, self.noise_dist, self.noise_sample_size)
-    loss = lossfunc.evaluate(O, Y, N)
+    loss = lossfunc.evaluate(O, self.symY, self.symN)
     # loss = T.sum(T.log(pd1) + T.sum(T.log(pd0), axis=1)) # scalar
 
-    dD = T.grad(loss, self.D)
+    self.symdD = T.grad(loss, self.D)
     if self.hidden_dim1 > 0:
-      dC = T.grad(loss, self.C)
+      self.symdC = T.grad(loss, self.C)
     else:
       pass
-    dM = T.grad(loss, self.M)
-    dE = T.grad(loss, self.E)
+    self.symdM = T.grad(loss, self.M)
+    self.symdE = T.grad(loss, self.E)
     if self.hidden_dim1 > 0:
-      dCb = T.grad(loss, self.Cb)
-    dMb = T.grad(loss, self.Mb)
-    dEb = T.grad(loss, self.Eb)
+      self.symdCb = T.grad(loss, self.Cb)
+    self.symdMb = T.grad(loss, self.Mb)
+    self.symdEb = T.grad(loss, self.Eb)
     
-    lr = T.scalar('lr', dtype=theano.config.floatX)
+    self.symlr = T.scalar('lr', dtype=theano.config.floatX)
 
-    self.pred = theano.function(inputs = [X], outputs = predictions)
-    self.xent = theano.function(inputs = [X, Y], outputs = xent)
-    self.loss = theano.function(inputs = [X, Y, N], outputs = loss)
+    self.pred = theano.function(inputs = [self.symX], outputs = predictions)
+    self.xent = theano.function(inputs = [self.symX, self.symY], outputs = xent)
+    self.loss = theano.function(inputs = [self.symX, self.symY, self.symN], outputs = loss)
     if self.hidden_dim1 > 0:
-      self.backprop = theano.function(inputs = [X, Y, N], outputs = [dD, dC, dM, dE, dCb, dMb, dEb])
-      self.sgd = theano.function(inputs = [X, Y, N, lr], outputs = [], 
+      self.backprop = theano.function(inputs = [self.symX, self.symY, self.symN], outputs = [self.symdD, self.symdC, self.symdM, self.symdE, self.symdCb, self.symdMb, self.symdEb])
+      self.sgd = theano.function(inputs = [self.symX, self.symY, self.symN, self.symlr], outputs = [], 
           updates = [
-              (self.D, self.D + lr * dD),
-              (self.C, self.C + lr * dC),
-              (self.M, self.M + lr * dM),
-              (self.E, self.E + lr * dE),
-              (self.Cb, self.Cb + lr * dCb), 
-              (self.Mb, self.Mb + lr * dMb), 
-              (self.Eb, self.Eb + lr * dEb), 
+              (self.D, self.D + self.symlr * self.symdD),
+              (self.C, self.C + self.symlr * self.symdC),
+              (self.M, self.M + self.symlr * self.symdM),
+              (self.E, self.E + self.symlr * self.symdE),
+              (self.Cb, self.Cb + self.symlr * self.symdCb), 
+              (self.Mb, self.Mb + self.symlr * self.symdMb), 
+              (self.Eb, self.Eb + self.symlr * self.symdEb), 
               ])
       self.weights = theano.function(inputs = [], outputs = [self.D, self.C, self.M, self.E, self.Cb, self.Mb, self.Eb])
+      
     else:
-      self.backprop = theano.function(inputs = [X, Y, N], outputs = [dD, dM, dE, dMb, dEb])
-      self.sgd = theano.function(inputs = [X, Y, N, lr], outputs = [], 
+      self.backprop = theano.function(inputs = [self.symX, self.symY, self.symN], outputs = [self.symdD, self.symdM, self.symdE, self.symdMb, self.symdEb])
+      self.sgd = theano.function(inputs = [self.symX, self.symY, self.symN, self.symlr], outputs = [], 
           updates = [
-              (self.D, self.D + lr * dD),
-              (self.M, self.M + lr * dM),
-              (self.E, self.E + lr * dE),
-              (self.Mb, self.Mb + lr * dMb), 
-              (self.Eb, self.Eb + lr * dEb), 
+              (self.D, self.D + self.symlr * self.symdD),
+              (self.M, self.M + self.symlr * self.symdM),
+              (self.E, self.E + self.symlr * self.symdE),
+              (self.Mb, self.Mb + self.symlr * self.symdMb), 
+              (self.Eb, self.Eb + self.symlr * self.symdEb), 
               ])
-      self.weights = theano.function(inputs = [], outputs = [self.D,  self.M, self.E,  self.Mb, self.Eb])
+      self.weights = theano.function(inputs = [], outputs = [self.D, self.M, self.E, self.Mb, self.Eb])
 
   def dump_matrix(self, m, model_file):
       np.savetxt(model_file, m, fmt="%.6f", delimiter='\t')
@@ -224,7 +226,7 @@ class NNJM:
       # config
       model_file.write("\\config\n")
       model_file.write("version 1\n")
-      model_file.write("ngram_size {0}\n".format(self.n_gram))
+      model_file.write("ngram_size {0}\n".format(self.num_inputs))
       model_file.write("input_vocab_size {0}\n".format(self.vocab_size))
       model_file.write("output_vocab_size {0}\n".format(self.target_vocab_size))
       model_file.write("input_embedding_dimension {0}\n".format(self.word_dim))
@@ -232,7 +234,7 @@ class NNJM:
       model_file.write("output_embedding_dimension {0}\n".format(self.hidden_dim2))
       model_file.write("activation_function rectifier\n\n") # currently only supporting rectifier... 
   
-      if net.hidden_dim1 > 0:
+      if self.hidden_dim1 > 0:
         [D, C, M, E, Cb, Mb, Eb] = self.weights()
       else:
         [D, M, E, Mb, Eb] = self.weights()
@@ -243,7 +245,7 @@ class NNJM:
       model_file.write("\n")
   
       # hidden_weights 1
-      if net.hidden_dim1 > 0:
+      if self.hidden_dim1 > 0:
         model_file.write("\\hidden_weights 1\n")
         self.dump_matrix(C, model_file)
         model_file.write("\n")
@@ -265,7 +267,7 @@ class NNJM:
   
       # Made compliant to Moses-accepted format
       # Note hidden_dim1 in the options is defined differently as in model file
-      if net.hidden_dim1 > 0: 
+      if self.hidden_dim1 > 0: 
         # hidden_weights 2
         model_file.write("\\hidden_weights 2\n")
         self.dump_matrix(M, model_file)
@@ -365,7 +367,7 @@ class NNJM:
 
 def shuffle(indexed_ngrams, predictions):
   logging.info("shuffling data... ")
-  arr = np.arange(len(indexed_ngrams))
+  arr = np.random.shuffle(np.arange(len(indexed_ngrams)))
   indexed_ngrams_shuffled = indexed_ngrams[arr, :]
   predictions_shuffled = predictions[arr]
   return (indexed_ngrams_shuffled, predictions_shuffled)

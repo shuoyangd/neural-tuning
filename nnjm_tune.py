@@ -7,7 +7,7 @@ from collections import Counter
 import codecs
 import logging
 from loss import NCE
-from nnjm import NNJM
+from nnjm import NNJM, shuffle
 from utils.numberizer import numberizer
 from utils.numberizer import TARGET_TYPE, SOURCE_TYPE
 from utils.heuristics import *
@@ -68,27 +68,44 @@ else:
 class NNJMBasicTune(NNJM):
   def __init__(self, num_inputs, vocab_size, target_vocab_size, word_dim=150, hidden_dim1=150, hidden_dim2=750, noise_sample_size=100, batch_size=1000, noise_dist=[]):
     NNJM.__init__(self, num_inputs, vocab_size, target_vocab_size, word_dim, hidden_dim1, hidden_dim2, noise_sample_size, batch_size, noise_dist)
-    self.update_pos = theano.function(inputs = [X, Y, N, lr], outputs = [], 
+    if self.hidden_dim1 > 0:
+      self.update_pos = theano.function(inputs = [self.symX, self.symY, self.symN, self.symlr], outputs = [], 
           updates = [
-              (self.D, self.D + lr * dD),
-              (self.C, self.C + lr * dC),
-              (self.M, self.M + lr * dM),
-              (self.E, self.E + lr * dE),
-              (self.Cb, self.Cb + lr * dCb), 
-              (self.Mb, self.Mb + lr * dMb), 
-              (self.Eb, self.Eb + lr * dEb), 
+              (self.D, self.D + self.symlr * self.symdD),
+              (self.C, self.C + self.symlr * self.symdC),
+              (self.M, self.M + self.symlr * self.symdM),
+              (self.E, self.E + self.symlr * self.symdE),
+              (self.Cb, self.Cb + self.symlr * self.symdCb), 
+              (self.Mb, self.Mb + self.symlr * self.symdMb), 
+              (self.Eb, self.Eb + self.symlr * self.symdEb), 
               ])
-    self.update_neg = theano.function(inputs = [X, Y, N, lr], outputs = [], 
+      self.update_neg = theano.function(inputs = [self.symX, self.symY, self.symN, self.symlr], outputs = [], 
           updates = [
-              (self.D, self.D - lr * dD),
-              (self.C, self.C - lr * dC),
-              (self.M, self.M - lr * dM),
-              (self.E, self.E - lr * dE),
-              (self.Cb, self.Cb - lr * dCb), 
-              (self.Mb, self.Mb - lr * dMb), 
-              (self.Eb, self.Eb - lr * dEb), 
+              (self.D, self.D - self.symlr * self.symdD),
+              (self.C, self.C - self.symlr * self.symdC),
+              (self.M, self.M - self.symlr * self.symdM),
+              (self.E, self.E - self.symlr * self.symdE),
+              (self.Cb, self.Cb - self.symlr * self.symdCb), 
+              (self.Mb, self.Mb - self.symlr * self.symdMb), 
+              (self.Eb, self.Eb - self.symlr * self.symdEb), 
               ])
-
+    else:
+      self.update_pos = theano.function(inputs = [self.symX, self.symY, self.symN, self.symlr], outputs = [], 
+          updates = [
+              (self.D, self.D + self.symlr * self.symdD),
+              (self.M, self.M + self.symlr * self.symdM),
+              (self.E, self.E + self.symlr * self.symdE),
+              (self.Mb, self.Mb + self.symlr * self.symdMb), 
+              (self.Eb, self.Eb + self.symlr * self.symdEb), 
+              ])
+      self.update_neg = theano.function(inputs = [self.symX, self.symY, self.symN, self.symlr], outputs = [], 
+          updates = [
+              (self.D, self.D - self.symlr * self.symdD),
+              (self.M, self.M - self.symlr * self.symdM),
+              (self.E, self.E - self.symlr * self.symdE),
+              (self.Mb, self.Mb - self.symlr * self.symdMb), 
+              (self.Eb, self.Eb - self.symlr * self.symdEb), 
+              ])
 # ==================== END OF NNJM CLASS DEF ====================
 
 
@@ -196,7 +213,7 @@ def make_tuning_instances(nz, n_best_alignments, n_best_targets,  n_best_sources
     negative_input_contexts += dummy_input_contexts
   
   assert len(positive_output_labels) % batch_size == 0
-  return positive_input_contexts, positive_output_labels, negative_input_contexts, negative_output_labels
+  return np.array(positive_input_contexts), np.array(positive_output_labels), np.array(negative_input_contexts), np.array(negative_output_labels)
 
 
 def main(options):
@@ -232,15 +249,15 @@ def main(options):
       .format(options.n_gram, len(nz.v2i), options.learning_rate) + 
       "word dimension {0}, hidden dimension 1 {1}, hidden dimension 2 {2}, noise sample size {3}"
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
-  net = NNJMBasicTune(options.n_gram, len(nz.v2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
+  net = NNJMBasicTune(options.n_gram, len(nz.v2i), len(nz.t2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
-  net.load(options.model_file, options.noise_sample_size, options.batch_size, options.noise_dist)
+  net.load(options.model_file, options.noise_sample_size, options.batch_size, target_unigram_dist)
   for epoch in range(1, options.max_epoch + 1):
     (pos_contexts_shuffled, pos_outputs_shuffled) = shuffle(pos_contexts, pos_outputs)
     (neg_contexts_shuffled, neg_outputs_shuffled) = shuffle(neg_contexts, neg_outputs)
     sgd_epoch(pos_contexts_shuffled, pos_outputs_shuffled, neg_contexts_shuffled, neg_outputs_shuffled, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
-    	dump(net, options.working_dir + "/NNJM.model." + str(epoch), options, nz.v2i.keys())
+    	net.dump(options.working_dir + "/NNJMBasicTune.model." + str(epoch))
   logging.info("training finished")
 
 if __name__ == "__main__":
