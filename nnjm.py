@@ -34,7 +34,9 @@ parser.add_argument("--alignment-file", "-af", dest="align_file", metavar="PATH"
 parser.add_argument("--model-file", "-mf", dest="model_file", metavar="PATH", help="file with already trained model as a initialization (moses style).")
 parser.add_argument("--vocab-file", "-vf", dest="vocab_file", metavar="PATH", help="if you have a pickled dictionary (numberizer), you can use it here.")
 parser.add_argument("--working-dir", "-w", dest="working_dir", metavar="PATH", help="Directory used to dump models etc.", required=True)
-parser.add_argument("--validation-file", dest="validation_file", metavar="PATH", help="Validation corpus used for stopping criteria.")
+parser.add_argument("--validation-target-file", "-vtf", dest="val_trg_file", metavar="PATH", help="Validation target corpus used for stopping criteria.")
+parser.add_argument("--validation-source-file", "-vsf", dest="val_src_file", metavar="PATH", help="Validation source corpus used for stopping criteria.")
+parser.add_argument("--validation-alignment-file", "-vaf", dest="val_align_file", metavar="PATH", help="Validation alignment corpus used for stopping criteria.")
 parser.add_argument("--learning-rate", dest="learning_rate", type=float, metavar="FLOAT", help="Learning rate used to update weights (default = 1.0).")
 parser.add_argument("--vocab-size", dest="vocab_size", type=int, metavar="INT", help="Vocabulary size on each side of the NNJM  (default = 16000).")
 parser.add_argument("--word-dim", dest="word_dim", type=int, metavar="INT", help="Dimension of word embedding (default = 150).")
@@ -226,7 +228,7 @@ class NNJM:
       # config
       model_file.write("\\config\n")
       model_file.write("version 1\n")
-      model_file.write("ngram_size {0}\n".format(self.num_inputs))
+      model_file.write("ngram_size {0}\n".format(self.num_inputs + 1))
       model_file.write("input_vocab_size {0}\n".format(self.vocab_size))
       model_file.write("output_vocab_size {0}\n".format(self.target_vocab_size))
       model_file.write("input_embedding_dimension {0}\n".format(self.word_dim))
@@ -320,7 +322,7 @@ class NNJM:
         while line.strip() != "":
           pair = line.strip().split(' ')
           if pair[0] == "ngram_size":
-            self.num_inputs = int(pair[1])
+            self.num_inputs = int(pair[1]) - 1
           if pair[0] == "input_vocab_size":
             self.vocab_size = int(pair[1])
           if pair[0] == "output_vocab_size":
@@ -367,7 +369,8 @@ class NNJM:
 
 def shuffle(indexed_ngrams, predictions):
   logging.info("shuffling data... ")
-  arr = np.random.shuffle(np.arange(len(indexed_ngrams)))
+  arr = np.arange(len(indexed_ngrams))
+  np.random.shuffle(arr)
   indexed_ngrams_shuffled = indexed_ngrams[arr, :]
   predictions_shuffled = predictions[arr]
   return (indexed_ngrams_shuffled, predictions_shuffled)
@@ -381,7 +384,7 @@ def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist):
     if len(indexed_ngrams) - start >= options.batch_size:
       X = indexed_ngrams[start: start + options.batch_size]
       Y = predictions[start: start + options.batch_size]
-      N = np.array(rand.distint(noise_dist, (options.noise_sample_size,)), dtype='int64') # (batch_size, noise_sample_size)
+      N = np.array(rand.distint(noise_dist, (options.noise_sample_size,)), dtype='int64') # (noise_sample_size, )
       # N = np.array(rand.distint(noise_dist, (options.batch_size, options.noise_sample_size)), dtype='int64') # (batch_size, noise_sample_size)
       net.sgd(X, Y, N, floatX(options.learning_rate))
     instance_count += options.batch_size
@@ -392,6 +395,18 @@ def sgd(indexed_ngrams, predictions, net, options, epoch, noise_dist):
   # total_loss = net.loss(indexed_ngrams, predictions, N)
   # logging.info("epoch {0} finished with NCE loss {1}".format(epoch, total_loss))
   logging.info("epoch {0} finished".format(epoch))
+
+def validate(indexed_ngrams, predictions, net, options, epoch, noise_dist):
+  xent = 0.0
+  loss = 0.0
+  for start in range(0, len(indexed_ngrams), options.batch_size):
+    if len(indexed_ngrams) - start >= options.batch_size:
+      X = indexed_ngrams[start: start + options.batch_size]
+      Y = predictions[start: start + options.batch_size]
+      N = np.array(rand.distint(noise_dist, (options.noise_sample_size,)), dtype='int64') # (noise_sample_size, )
+      xent += net.xent(X, Y)
+      loss += net.loss(X, Y, N)
+  logging.info("validation upon completing epoch {0}: cross entropy {1}, NCE loss {2}".format(epoch, xent, loss))
 
 def read_alignment(align_file):
   n_align = []
@@ -406,7 +421,6 @@ def get_left_src(nz, src, a, w):
   if len(lsc) < w:
     lsc = [nz.v2i[SOURCE_TYPE, nz.bos]] * (w - len(lsc)) + lsc
   return lsc
-
 
 def get_right_src(nz, src, a, w):
   rsc = src[a+1: a + 1 + w]
@@ -453,13 +467,10 @@ def get_effective_align(align, idx):
   else:
     raise NotImplementedError
 
-
-
-
-
 def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=4, sw_size=4):
   input_contexts = []
   output_labels = []
+  linen = 0
   for trg, src, align in zip(trnz_target, trnz_source, trnz_align):
     for idx in range(1, len(trg)):
       tc = [] # contains target context
@@ -481,6 +492,7 @@ def make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=4,
       assert len(fullc) == tc_size + 1 + (2 * sw_size)
       input_contexts.append(fullc)
       output_labels.append(trg[idx])
+    linen += 1
   return np.array(input_contexts), np.array(output_labels)
 
 def main(options):
@@ -502,6 +514,14 @@ def main(options):
   if not options.vocab_file:
     pickle.dump(nz, open(options.working_dir + "/numberizer.pickle", 'wb'))
   input_contexts, output_labels =  make_training_instances(nz, trnz_align, trnz_target, trnz_source, tc_size=options.tc_size, sw_size=options.sw_size)
+  if options.val_trg_file and options.val_src_file and options.val_align_file:
+    vanz_target = nz.numberize_sent(TARGET_TYPE, options.val_trg_file)
+    vanz_source = nz.numberize_sent(SOURCE_TYPE, options.val_src_file)
+    vanz_align = read_alignment(options.val_align_file)
+    val_input_contexts, val_output_labels =  make_training_instances(nz, vanz_align, vanz_target, vanz_source, tc_size=options.tc_size, sw_size=options.sw_size)
+  elif options.val_trg_file or options.val_src_file or options.val_align_file:
+    logging.fatal("You have to supply all three validation files (source, target, alignment) to trigger validation.")
+    sys.exit(1)
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
   for tw, tw_count in nz.t2c.iteritems():
@@ -530,6 +550,8 @@ def main(options):
   for epoch in range(1, options.max_epoch + 1):
     (input_contexts_shuffled, output_labels_shuffled) = shuffle(input_contexts, output_labels)
     sgd(input_contexts_shuffled, output_labels_shuffled, net, options, epoch, target_unigram_dist)
+    if options.val_trg_file and options.val_src_file and options.val_align_file:
+      validate(val_input_contexts, val_output_labels, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
       net.dump(options.working_dir + "/NNJM.model." + str(epoch))
   logging.info("training finished")

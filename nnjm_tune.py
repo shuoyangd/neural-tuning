@@ -7,7 +7,7 @@ from collections import Counter
 import codecs
 import logging
 from loss import NCE
-from nnjm import NNJM, shuffle
+from nnjm import NNJM, shuffle, validate, make_training_instances
 from utils.numberizer import numberizer
 from utils.numberizer import TARGET_TYPE, SOURCE_TYPE
 from utils.heuristics import *
@@ -33,14 +33,18 @@ parser.add_argument("--target-file", "-t", dest="target_file", metavar="PATH", h
 parser.add_argument("--source-file", "-s", dest="source_file", metavar="PATH", help="file with repeated (aligned to n-best target sentences) source sentences.", required=True)
 parser.add_argument("--alignment-file", "-a", dest="align_file", metavar="PATH", help="file with word alignments between repeated source- n-best target (giza style).", required=True)
 parser.add_argument("--working-dir", "-w", dest="working_dir", metavar="PATH", help="Directory used to dump models etc.", required=True)
-parser.add_argument("--validation-file", dest="validation_file", metavar="PATH", help="Validation corpus used for stopping criteria.")
+parser.add_argument("--validation-target-file", "-vtf", dest="val_trg_file", metavar="PATH", help="Validation target corpus used for stopping criteria.")
+parser.add_argument("--validation-source-file", "-vsf", dest="val_src_file", metavar="PATH", help="Validation source corpus used for stopping criteria.")
+parser.add_argument("--validation-alignment-file", "-vaf", dest="val_align_file", metavar="PATH", help="Validation alignment corpus used for stopping criteria.")
 parser.add_argument("--learning-rate", dest="learning_rate", type=float, metavar="FLOAT", help="Learning rate used to update weights (default = 1.0).")
 parser.add_argument("--vocab-size", dest="vocab_size", type=int, metavar="INT", help="Vocabulary size of the language model (default = 500000).")
 parser.add_argument("--word-dim", dest="word_dim", type=int, metavar="INT", help="Dimension of word embedding (default = 150).")
-parser.add_argument("--hidden-dim1", dest="hidden_dim1", type=int, metavar="INT", help="Dimension of hidden layer 1 (default = 150).")
-parser.add_argument("--hidden-dim2", dest="hidden_dim2", type=int, metavar="INT", help="Dimension of hidden layer 2 (default = 750).")
+parser.add_argument("--hidden-dim1", dest="hidden_dim1", type=int, metavar="INT", help="Dimension of hidden layer 1 (default = 750).")
+parser.add_argument("--hidden-dim2", dest="hidden_dim2", type=int, metavar="INT", help="Dimension of hidden layer 2. Pass dimension 0 if you only want 1 hidden layer. (default = 0).")
 parser.add_argument("--noise-sample-size", "-k", dest="noise_sample_size", type=int, metavar="INT", help="Size of the noise sample per training instance for NCE (default = 100).")
-parser.add_argument("--n-gram", "-n", dest="n_gram", type=int, metavar="INT", help="Size of the N-gram (default = 5).")
+parser.add_argument("--sw-size", dest="sw_size", type=int, metavar="INT", help="Size of the one-side source context (default = 4).")
+parser.add_argument("--tc-size", dest="tc_size", type=int, metavar="INT", help="Size of the target context (default = 4).")
+parser.add_argument("--n-best", dest="n_best", type=int, metavar="INT", help="Size of the n-best list (default = 200).")
 parser.add_argument("--max-epoch", dest="max_epoch", type=int, metavar="INT", help="Maximum number of epochs should be performed during training (default = 5).")
 parser.add_argument("--save-interval", dest="save_interval", type=int, metavar="INT", help="Saving model only for every several epochs (default = 1).")
 parser.add_argument("--batch-size", "-b", dest="batch_size", type=int, metavar="INT", help="Batch size (in sentences) of SGD (default = 1000).")
@@ -50,12 +54,13 @@ parser.set_defaults(
   learning_rate=0.001,
   word_dim=150,
   vocab_size=500000,
-  hidden_dim1=512,
-  hidden_dim2=512,
+  hidden_dim1=0,
+  hidden_dim2=750,
   noise_sample_size=100,
   sw_size=4,
-  tc_size=5,
+  tc_size=4,
   n_gram=14,
+  n_best=200,
   max_epoch=5,
   batch_size=128,
   save_interval=1)
@@ -142,7 +147,7 @@ def read_alignment(align_file):
   return n_align
 
 def get_dummy_training_tuple(nz, tc_size, sw_size):
-    fullc =  [nz.v2i[SOURCE_TYPE, UNK]] * sw_size + [nz.v2i[TARGET_TYPE, UNK]] * tc_size
+    fullc =  [nz.v2i[SOURCE_TYPE, UNK]] * (1 + 2 * sw_size) + [nz.v2i[TARGET_TYPE, UNK]] * tc_size
     t = nz.v2i[TARGET_TYPE, UNK]
     return fullc, t
 
@@ -171,20 +176,21 @@ def make_tuning_instances(nz, n_best_alignments, n_best_targets,  n_best_sources
   positive_output_labels = []
   negative_input_contexts = []
   negative_output_labels = []
-  # pdb.set_trace()
+
   for n_idx, (trg, src, align) in enumerate(zip(n_best_targets, n_best_sources, n_best_alignments)):
-    if n_idx % 200 == 0: # convert this to a range if we want top k and bottom k in the n-best 
+    if n_idx % 200 >= 0 and n_idx % 200 < 50: # convert this to a range if we want top k and bottom k in the n-best 
       for idx in range(1, len(trg)):
         fullc, trg_idx = get_training_tuple(nz, idx, trg, src, align, tc_size, sw_size)
         positive_input_contexts.append(fullc)
         positive_output_labels.append(trg[idx])
-    elif n_idx % 200 == 199:
+    elif n_idx % 200 >= 150:
       for idx in range(1, len(trg)):
-          fullc, trg_idx = get_training_tuple(nz, idx, trg, src, align, tc_size, sw_size)
-          negative_input_contexts.append(fullc)
-          negative_output_labels.append(trg_idx)
+        fullc, trg_idx = get_training_tuple(nz, idx, trg, src, align, tc_size, sw_size)
+        negative_input_contexts.append(fullc)
+        negative_output_labels.append(trg_idx)
     else:
         pass
+
   #pad to same size
   max_num_pad = np.abs(len(positive_output_labels) - len(negative_output_labels)) 
   if max_num_pad > 0:
@@ -230,7 +236,16 @@ def main(options):
   trnz_target = nz.numberize_sent(TARGET_TYPE, options.target_file)
   trnz_source = nz.numberize_sent(SOURCE_TYPE, options.source_file)
   trnz_align = read_alignment(options.align_file) 
-  pos_contexts, pos_outputs, neg_contexts, neg_outputs = make_tuning_instances(nz,trnz_align, trnz_target, trnz_source, options.batch_size) 
+  pos_contexts, pos_outputs, neg_contexts, neg_outputs = make_tuning_instances(nz,trnz_align, trnz_target, trnz_source, options.batch_size, n=options.n_best, tc_size=options.tc_size, sw_size=options.sw_size) 
+
+  if options.val_trg_file and options.val_src_file and options.val_align_file:
+    vanz_target = nz.numberize_sent(TARGET_TYPE, options.val_trg_file)
+    vanz_source = nz.numberize_sent(SOURCE_TYPE, options.val_src_file)
+    vanz_align = read_alignment(options.val_align_file)
+    val_input_contexts, val_output_labels = make_training_instances(nz, vanz_align, vanz_target, vanz_source, tc_size=options.tc_size, sw_size=options.sw_size)
+  elif options.val_trg_file or options.val_src_file or options.val_align_file:
+    logging.fatal("You have to supply all three validation files (source, target, alignment) to trigger validation.")
+    sys.exit(1)
 
   target_unigram_counts = np.zeros(len(nz.t2c), dtype=floatX)
   for tw, tw_count in nz.t2c.iteritems():
@@ -249,13 +264,15 @@ def main(options):
       .format(options.n_gram, len(nz.v2i), options.learning_rate) + 
       "word dimension {0}, hidden dimension 1 {1}, hidden dimension 2 {2}, noise sample size {3}"
       .format(options.word_dim, options.hidden_dim1, options.hidden_dim2, options.noise_sample_size))
-  net = NNJMBasicTune(options.n_gram, len(nz.v2i), len(nz.t2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
+  net = NNJMBasicTune(options.n_gram - 1, len(nz.v2i), len(nz.t2i), options.word_dim, options.hidden_dim1, options.hidden_dim2,
       options.noise_sample_size, options.batch_size, target_unigram_dist)
   net.load(options.model_file, options.noise_sample_size, options.batch_size, target_unigram_dist)
   for epoch in range(1, options.max_epoch + 1):
     (pos_contexts_shuffled, pos_outputs_shuffled) = shuffle(pos_contexts, pos_outputs)
     (neg_contexts_shuffled, neg_outputs_shuffled) = shuffle(neg_contexts, neg_outputs)
     sgd_epoch(pos_contexts_shuffled, pos_outputs_shuffled, neg_contexts_shuffled, neg_outputs_shuffled, net, options, epoch, target_unigram_dist)
+    if options.val_trg_file and options.val_src_file and options.val_align_file:
+      validate(val_input_contexts, val_output_labels, net, options, epoch, target_unigram_dist)
     if epoch % options.save_interval == 0:
     	net.dump(options.working_dir + "/NNJMBasicTune.model." + str(epoch))
   logging.info("training finished")
